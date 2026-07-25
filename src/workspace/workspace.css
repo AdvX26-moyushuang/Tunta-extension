@@ -36,7 +36,7 @@ body {
 .shell .btn {
   min-height: 38px;
   padding: 9px 16px;
-  border: 1.5px solid var(--ink);
+  border: 1.5px solid var(--ink-soft);
   border-radius: var(--r-pill);
   background: var(--paper-bright);
   box-shadow: none;
@@ -58,6 +58,11 @@ body {
   border-color: var(--ink);
   background: var(--brand-sun);
   color: var(--ink);
+}
+
+/* primary 的 hover 走自己的浅色版，不要被通用 hover 的水蓝覆盖 */
+.shell .btn.btn-primary:hover:not(:disabled) {
+  background: var(--brand-sun-pale);
 }
 
 .shell .btn.btn-danger {
@@ -701,8 +706,9 @@ body {
 .review-meta {
   position: relative;
   z-index: 1;
-  margin-top: 15px;
-  color: white;
+  margin-bottom: 100px;
+  /* 原来是 white——衬底被去掉后白字落在 paper 上几乎看不见 */
+  color: var(--muted);
   font-size: var(--text-xs);
   text-align: center;
 }
@@ -1630,10 +1636,6 @@ body {
 
   .card-actions {
     margin-top: 20px;
-  }
-
-  .review-meta {
-    margin-top: 10px;
   }
 }
 

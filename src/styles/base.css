@@ -152,7 +152,7 @@ p {
   gap: 8px;
   padding: 11px 16px;
   cursor: pointer;
-  border: 1px solid var(--ink);
+  border: 1px solid var(--ink-soft);
   border-radius: var(--r-pill);
   background: var(--paper-bright);
   font-size: var(--text-xs);
