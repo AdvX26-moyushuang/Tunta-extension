@@ -470,13 +470,16 @@ body {
   width: min(680px, 100%);
 }
 
-/* 一叠卡：两层纯色向下错位，不旋转、不描边——扁平的「还有下一张」 */
+/*
+ * 一叠卡：两层纯色向下错位，不旋转、不描边——扁平的「还有下一张」。
+ * 不再绝对定位贴在卡片下沿，改为跟 review-meta 一起排在 card-stack 上方，
+ * 宽度沿用原来 680 - 左右各 14px 的内缩。
+ */
 .card-shadow {
-  position: absolute;
-  right: 14px;
-  bottom: -9px;
-  left: 14px;
+  position: relative;
+  width: min(652px, calc(100% - 28px));
   height: 34px;
+  margin-bottom: 100px;
   border-radius: var(--r-lg);
   background: var(--brand-water);
 }

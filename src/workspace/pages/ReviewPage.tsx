@@ -81,8 +81,8 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
         {state === "ready" && item ? (
           <>
             <div className="review-meta">待消化剩余 {remaining} 条 · ← 下一条 · → 归档</div>
+            <div className="card-shadow" aria-hidden="true" />
             <div className="card-stack">
-              <div className="card-shadow" aria-hidden="true" />
               <article className={`knowledge-card ${leaving ? `leave-${leaving}` : ""}`}>
                 <div className="card-topline">
                   <span className="card-type">{item.card.cardType}</span>
