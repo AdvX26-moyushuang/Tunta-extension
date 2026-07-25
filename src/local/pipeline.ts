@@ -19,7 +19,17 @@ import { expandListCaptures } from "./expand";
 import { executeSnapshotOnTab, SnapshotError, type SnapshotData } from "./snapshot";
 
 const TAB_LOAD_TIMEOUT_MS = 45_000;
-const STUCK_THRESHOLD_MS = 45_000;
+
+/**
+ * 续跑阈值必须大于任何单阶段的最长耗时（页面加载 45s、provider 90s），
+ * 否则调用还活着就会被重复触发——running 是内存态 Set，SW 一重启就拦不住。
+ */
+const STUCK_THRESHOLD_MS = 180_000;
+
+/** 自动续跑的次数上限。兜底不该是无限的：用尽后写 failed，让用户看见它放弃了。 */
+const MAX_RESUME_ATTEMPTS = 3;
+
+export const PIPELINE_STALLED = "PIPELINE_STALLED";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -122,6 +132,13 @@ function toFailure(cause: unknown): CaptureFailure {
 
 const running = new Set<string>();
 
+/**
+ * 列表展开产生的子收藏在父流水线里串行排队。排队期间它们是 idle 且 updatedAt 不动，
+ * 续跑扫描会误判成卡住——既会重复触发，又会白白烧掉 attempts 配额。
+ * 两个 Set 都是内存态，SW 一重启就清空：那时父循环也没了，子收藏确实该被续跑。
+ */
+const queued = new Set<string>();
+
 async function save(capture: StoredCapture): Promise<StoredCapture> {
   const next = { ...capture, updatedAt: nowIso() };
   await putCapture(next);
@@ -184,8 +201,14 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
       });
       
 
-      for (const childId of createdIds) {
-        await runPipeline(childId);
+      for (const childId of createdIds) queued.add(childId);
+      try {
+        for (const childId of createdIds) {
+          queued.delete(childId);
+          await runPipeline(childId);
+        }
+      } finally {
+        for (const childId of createdIds) queued.delete(childId);
       }
       return;
     }
@@ -252,7 +275,7 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
       capture = await save({ ...capture, stage: "graph" });
     }
 
-    await save({ ...capture, status: "done", failure: null });
+    await save({ ...capture, status: "done", failure: null, attempts: 0 });
   } catch (cause) {
     const failure = toFailure(cause);
     const current = await getCapture(captureId);
@@ -280,9 +303,28 @@ export async function resumeStuckPipelines(): Promise<void> {
     (capture) =>
       (capture.status === "idle" || capture.status === "fetching" || capture.status === "parsing") &&
       !capture.archived &&
+      !running.has(capture.captureId) &&
+      !queued.has(capture.captureId) &&
       Date.parse(capture.updatedAt) < cutoff,
   );
   for (const capture of stuck) {
+    const attempts = (capture.attempts ?? 0) + 1;
+    if (attempts > MAX_RESUME_ATTEMPTS) {
+      await save({
+        ...capture,
+        status: "failed",
+        failure: {
+          code: PIPELINE_STALLED,
+          message: `流水线连续 ${MAX_RESUME_ATTEMPTS} 次续跑仍停在「${capture.status}」，已停止自动重试。请检查 provider 与网络链路后手动重试。`,
+          stage: capture.status === "parsing" ? "generate" : "fetch",
+          recoverable: true,
+        },
+      });
+      console.warn(`[tunta] pipeline 续跑次数耗尽（${capture.captureId}），标记为失败`);
+      continue;
+    }
+
+    await save({ ...capture, attempts });
     void runPipeline(capture.captureId);
   }
 }
