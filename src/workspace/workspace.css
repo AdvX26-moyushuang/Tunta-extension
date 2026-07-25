@@ -167,14 +167,16 @@ body {
   height: var(--topbar-height);
   flex: 0 0 auto;
   align-items: center;
-  padding: 0 14px;
+  padding: 0 16px;
 }
 
-/* 异形 logo：透明底、无描边无衬底，直接铺满 mark 宽度，不留方块留白 */
-.mark-logo {
-  width: 100%;
-  height: auto;
-  object-fit: contain;
+.mark-icon {
+  width: 56px;
+  height: 56px;
+  border: 1.5px solid var(--brand-otter);
+  border-radius: var(--r-md);
+  background: var(--brand-sun);
+  object-fit: cover;
 }
 
 .rail-nav {
@@ -1667,6 +1669,12 @@ body {
     padding: 0 12px;
   }
 
+  .mark-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: var(--r-sm);
+  }
+
   .rail-button {
     min-height: 42px;
     gap: 10px;
@@ -1714,6 +1722,13 @@ body {
 
   .mark {
     padding: 0 10px;
+  }
+
+  .mark-icon {
+    width: 40px;
+    height: 40px;
+    border-width: 1px;
+    border-radius: var(--r-sm);
   }
 
   .rail-button {

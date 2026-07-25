@@ -12,7 +12,7 @@ import { LibraryPage } from "./pages/LibraryPage";
 import { TracePage } from "./pages/TracePage";
 import { KaleidoscopePage } from "./pages/KaleidoscopePage";
 import { SettingsPage } from "./pages/SettingsPage";
-import tuntaLogoUrl from "../../assets/logo-wordmark.png";
+import tuntaIconUrl from "../../assets/icon.png";
 
 type Page = "review" | "search" | "library" | "trace" | "kaleidoscope" | "settings";
 
@@ -102,7 +102,7 @@ export function App() {
     <div className="shell">
       <aside className="rail" aria-label="主导航">
         <div className="mark">
-          <img className="mark-logo" src={tuntaLogoUrl} alt="Tunta" />
+          <img className="mark-icon" src={tuntaIconUrl} alt="Tunta" />
         </div>
         <nav className="rail-nav">
           {PRIMARY_NAV.map((item) => (
