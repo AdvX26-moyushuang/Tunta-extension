@@ -29,7 +29,7 @@ body {
 .popup .btn {
   min-height: 36px;
   padding: 8px 15px;
-  border: 1.5px solid var(--ink);
+  border: 1.5px solid var(--ink-soft);
   border-radius: var(--r-pill);
   background: var(--paper-bright);
   box-shadow: none;

@@ -583,9 +583,50 @@ interface BuildInput {
   warnings?: ParserProblem[];
 }
 
+function normalizedBlockText(text: string): string {
+  return text.normalize("NFKC").replace(/\s+/g, " ").trim();
+}
+
+function blockDedupeKey(block: BuildInput["blocks"][number]): string {
+  const text = normalizedBlockText(block.text);
+  if (block.kind !== "transcript") return text;
+  return [
+    text,
+    block.locator.kind,
+    block.locator.start_ms ?? "",
+    block.locator.end_ms ?? "",
+  ].join("\u0000");
+}
+
+function deduplicateBlocks(blocks: BuildInput["blocks"]): {
+  blocks: BuildInput["blocks"];
+  removedCount: number;
+} {
+  const seen = new Set<string>();
+  const unique: BuildInput["blocks"] = [];
+  for (const block of blocks) {
+    const key = blockDedupeKey(block);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(block);
+  }
+  return { blocks: unique, removedCount: blocks.length - unique.length };
+}
+
 export async function buildParserOutput(input: BuildInput): Promise<ParserOutput> {
   const now = new Date().toISOString();
-  const hash = await sha256Hex(input.blocks.map((block) => block.text).join("\n"));
+  const deduplicated = deduplicateBlocks(input.blocks);
+  const warnings = [...(input.warnings ?? [])];
+  if (deduplicated.removedCount > 0) {
+    warnings.push({
+      code: "DUPLICATE_BLOCKS_REMOVED",
+      message: `Parser normalize 移除了 ${deduplicated.removedCount} 个重复 block。`,
+      stage: "normalize",
+      recoverable: false,
+      details: { removed_count: deduplicated.removedCount },
+    });
+  }
+  const hash = await sha256Hex(deduplicated.blocks.map((block) => block.text).join("\n"));
   return {
     schema_version: "0.1.0",
     source: {
@@ -601,7 +642,7 @@ export async function buildParserOutput(input: BuildInput): Promise<ParserOutput
       language: "zh-CN",
       raw_content_ref: null,
     },
-    blocks: input.blocks.map((block, index) => ({
+    blocks: deduplicated.blocks.map((block, index) => ({
       block_id: `block:${block.kind}:${String(index + 1).padStart(3, "0")}`,
       order: index,
       kind: block.kind,
@@ -616,10 +657,10 @@ export async function buildParserOutput(input: BuildInput): Promise<ParserOutput
       job_id: input.jobId,
       parser_name: "extension-snapshot",
       parser_version: "0.1.0",
-      status: (input.warnings?.length ?? 0) > 0 ? "partial" : "completed",
+      status: warnings.length > 0 ? "partial" : "completed",
       parsed_at: now,
       content_hash: `sha256:${hash}`,
-      warnings: input.warnings ?? [],
+      warnings,
       errors: [],
     },
   };

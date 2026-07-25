@@ -7,9 +7,5 @@
     "rootDir": "src",
     "types": ["node", "chrome"]
   },
-  "include": [
-    "src/local/parser.test.ts",
-    "src/local/parser.ts",
-    "src/shared/api/contracts.ts"
-  ]
+  "include": ["src/local/*.test.ts"]
 }

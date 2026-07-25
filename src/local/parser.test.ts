@@ -246,3 +246,88 @@ test("uses a stable Xiaohongshu note id and marks incomplete media capture as pa
   assert.equal(output.parse.status, "partial");
   assert.equal(output.parse.warnings[0]?.code, "XHS_MEDIA_NOT_CAPTURED");
 });
+
+test("deduplicates repeated parser blocks at the Parser Output boundary", async () => {
+  const output = await buildParserOutput({
+    originalUrl: "https://example.com/repeated",
+    finalUrl: "https://example.com/repeated",
+    title: "重复正文",
+    platform: "example.com",
+    contentType: "article",
+    blocks: [
+      {
+        kind: "paragraph",
+        text: "同一段正文",
+        locator: { kind: "paragraph", paragraph_index: 0 },
+      },
+      {
+        kind: "paragraph",
+        text: "  同一段正文  ",
+        locator: { kind: "paragraph", paragraph_index: 1 },
+      },
+      {
+        kind: "paragraph",
+        text: "同一段正文",
+        locator: { kind: "paragraph", paragraph_index: 2 },
+      },
+      {
+        kind: "paragraph",
+        text: "另一段正文",
+        locator: { kind: "paragraph", paragraph_index: 3 },
+      },
+    ],
+    jobId: "job:test:dedupe",
+  });
+
+  assert.deepEqual(
+    output.blocks.map((block) => block.text),
+    ["同一段正文", "另一段正文"],
+  );
+  assert.deepEqual(
+    output.blocks.map((block) => block.order),
+    [0, 1],
+  );
+  assert.equal(output.parse.status, "partial");
+  assert.deepEqual(output.parse.warnings.at(-1), {
+    code: "DUPLICATE_BLOCKS_REMOVED",
+    message: "Parser normalize 移除了 2 个重复 block。",
+    stage: "normalize",
+    recoverable: false,
+    details: { removed_count: 2 },
+  });
+});
+
+test("preserves repeated transcript text at different timestamps", async () => {
+  const output = await buildParserOutput({
+    originalUrl: "https://www.bilibili.com/video/BV1REPEAT",
+    finalUrl: "https://www.bilibili.com/video/BV1REPEAT",
+    title: "重复台词",
+    platform: "bilibili",
+    contentType: "video",
+    blocks: [
+      {
+        kind: "transcript",
+        text: "谢谢大家",
+        locator: { kind: "timestamp", start_ms: 1_000, end_ms: 2_000 },
+      },
+      {
+        kind: "transcript",
+        text: "谢谢大家",
+        locator: { kind: "timestamp", start_ms: 5_000, end_ms: 6_000 },
+      },
+      {
+        kind: "transcript",
+        text: "谢谢大家",
+        locator: { kind: "timestamp", start_ms: 5_000, end_ms: 6_000 },
+      },
+    ],
+    jobId: "job:test:transcript-dedupe",
+  });
+
+  assert.equal(output.blocks.length, 2);
+  assert.deepEqual(
+    output.blocks.map((block) => block.locator.start_ms),
+    [1_000, 5_000],
+  );
+  assert.equal(output.parse.warnings.at(-1)?.code, "DUPLICATE_BLOCKS_REMOVED");
+});

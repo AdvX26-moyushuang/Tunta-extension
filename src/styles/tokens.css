@@ -6,6 +6,7 @@
 :root {
   /* Tunta brand palette：水、阳光、水獭与沙滩。 */
   --brand-sun: #ffe57c;
+  --brand-sun-pale: #fff2bd;
   --brand-otter: #775537;
   --brand-water: #2b7ab3;
   --brand-sand: #f5f0e8;
@@ -17,6 +18,8 @@
   --paper: #e9e5da;
   --paper-bright: #f5f1e7;
   --ink: #151614;
+  /* 普通 btn 的描边：比 ink 浅 20%，避免一排按钮把版面压太黑 */
+  --ink-soft: rgba(21, 22, 20, 0.8);
   --muted: #696b64;
   --line: rgba(21, 22, 20, 0.18);
   --line-strong: rgba(21, 22, 20, 0.42);

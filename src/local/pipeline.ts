@@ -9,6 +9,7 @@ import {
   putCapture,
   putCards,
   putDocument,
+  replaceCardsForSource,
   type StoredCapture,
   type StoredDocument,
 } from "./db";
@@ -221,9 +222,7 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
       }
       capture = await save({ ...capture, status: "parsing" });
       const curation = await generateCardsForDocument(settings, doc);
-      if (curation.cards.length > 0) {
-        await putCards(curation.cards);
-      }
+      await replaceCardsForSource(doc.sourceId, curation.cards);
       
       if (curation.source.title || curation.source.summary) {
         await putDocument({
