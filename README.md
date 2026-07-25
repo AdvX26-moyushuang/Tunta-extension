@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="https://www.tunta.xyz/assets/logo-3-_4Ir1svp.png" alt="屯獭 Tunta" width="420">
+  <img src="assets/logo-big.png" alt="屯獭 Tunta" width="420">
 </p>
 
 <h1 align="center">屯獭 Tunta</h1>
