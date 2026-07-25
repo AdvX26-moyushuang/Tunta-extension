@@ -471,15 +471,28 @@ body {
 }
 
 /*
- * 一叠卡：两层纯色向下错位，不旋转、不描边——扁平的「还有下一张」。
- * 不再绝对定位贴在卡片下沿，改为跟 review-meta 一起排在 card-stack 上方，
+ * card-shadow 与 review-meta 重合：蓝条是那行字的衬底，两者叠在同一个
+ * grid 格子里，整体排在 card-stack 上方。
  * 宽度沿用原来 680 - 左右各 14px 的内缩。
  */
+.review-banner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: min(652px, calc(100% - 28px));
+  margin-bottom: 100px;
+  place-items: center;
+}
+
+.review-banner > * {
+  grid-area: 1 / 1;
+}
+
+/* 一叠卡：两层纯色向下错位，不旋转、不描边——扁平的「还有下一张」 */
 .card-shadow {
   position: relative;
-  width: min(652px, calc(100% - 28px));
+  width: 100%;
   height: 34px;
-  margin-bottom: 100px;
   border-radius: var(--r-lg);
   background: var(--brand-water);
 }
@@ -709,9 +722,8 @@ body {
 .review-meta {
   position: relative;
   z-index: 1;
-  margin-bottom: 100px;
-  /* 原来是 white——衬底被去掉后白字落在 paper 上几乎看不见 */
-  color: var(--muted);
+  /* 衬底（card-shadow）回来了，白字重新有对比 */
+  color: white;
   font-size: var(--text-xs);
   text-align: center;
 }

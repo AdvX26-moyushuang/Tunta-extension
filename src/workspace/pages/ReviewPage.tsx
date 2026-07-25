@@ -80,8 +80,11 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
       <div className="review-stage">
         {state === "ready" && item ? (
           <>
-            <div className="review-meta">待消化剩余 {remaining} 条 · ← 下一条 · → 归档</div>
-            <div className="card-shadow" aria-hidden="true" />
+            {/* 蓝条是这行字的衬底，两者叠在同一个格子里 */}
+            <div className="review-banner">
+              <div className="card-shadow" aria-hidden="true" />
+              <div className="review-meta">待消化剩余 {remaining} 条 · ← 下一条 · → 归档</div>
+            </div>
             <div className="card-stack">
               <article className={`knowledge-card ${leaving ? `leave-${leaving}` : ""}`}>
                 <div className="card-topline">
