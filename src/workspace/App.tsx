@@ -110,11 +110,11 @@ export function App() {
               key={item.id}
               type="button"
               className={`rail-button ${page === item.id ? "active" : ""}`}
-              data-label={item.label}
-              aria-label={item.label}
+              aria-current={page === item.id ? "page" : undefined}
               onClick={() => setPage(item.id)}
             >
               <NavIcon name={item.id} />
+              <span className="rail-label">{item.label}</span>
             </button>
           ))}
         </nav>
@@ -123,11 +123,11 @@ export function App() {
             <button
               type="button"
               className={`rail-button ${page === "settings" ? "active" : ""}`}
-              data-label="设置"
-              aria-label="设置"
+              aria-current={page === "settings" ? "page" : undefined}
               onClick={() => setPage("settings")}
             >
               <NavIcon name="settings" />
+              <span className="rail-label">设置</span>
             </button>
           </nav>
           <div className="rail-foot" title={status ? "Backend 已连接" : "Backend 未连接"}>

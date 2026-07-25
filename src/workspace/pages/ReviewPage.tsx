@@ -97,14 +97,21 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
                   </span>
                 ))}
               </div>
-              <div className="evidence-strip">
-                <span className="evidence-mark">↗</span>
-                <div>
+              <button
+                type="button"
+                className="evidence-strip"
+                title={item.originalUrl}
+                aria-label={`打开原文：${hostOf(item.originalUrl)}`}
+                onClick={() => void openExternal(item.originalUrl)}
+              >
+                <span className="evidence-mark" aria-hidden="true">
+                  ↗
+                </span>
+                <span className="evidence-text">
                   <strong>{item.card.source?.source_id ?? item.capture.sourceId ?? "unknown"}</strong>
-                  <br />
-                  {item.originalUrl}
-                </div>
-              </div>
+                  <span className="evidence-host">{hostOf(item.originalUrl)} · 打开原文</span>
+                </span>
+              </button>
             </article>
             <div className="card-actions">
               <button type="button" className="action-button" onClick={() => void openExternal(item.originalUrl)}>
