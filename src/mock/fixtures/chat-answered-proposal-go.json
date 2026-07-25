@@ -1,0 +1,76 @@
+{
+  "schema_version": "0.2.0",
+  "query_id": "query:chat:proposal-go",
+  "status": "answered",
+  "answer": "可以把召回与证据链两张卡并入现有收藏项目[1]。",
+  "citations": [
+    {
+      "marker": 1,
+      "card_id": "card:retrieval:001",
+      "source_id": "source:article:001",
+      "block_id": "block:paragraph:003",
+      "quote": "系统对本地收藏库执行语义检索。",
+      "original_url": "https://example.com/recall",
+      "locator": {
+        "kind": "paragraph",
+        "start_ms": null,
+        "end_ms": null,
+        "page_number": null,
+        "paragraph_index": 3,
+        "selector": null
+      }
+    }
+  ],
+  "retrieved_cards": [
+    {
+      "card_id": "card:retrieval:001",
+      "card_type": "method",
+      "title": "先检索本地证据",
+      "body": "回答前先从本地收藏库命中相关材料。",
+      "domain_labels": [
+        "信息检索"
+      ],
+      "score": 0.0325,
+      "matched_by": [
+        "vector",
+        "fts"
+      ]
+    },
+    {
+      "card_id": "card:citation:002",
+      "card_type": "method",
+      "title": "引用回到具体位置",
+      "body": "引用要定位到原始 block 或时间戳。",
+      "domain_labels": [
+        "证据追溯"
+      ],
+      "score": 0.0161,
+      "matched_by": [
+        "vector"
+      ]
+    }
+  ],
+  "project_proposal": {
+    "proposal_id": "proposal:0123456789abcdef0123456789abcdef",
+    "project_id": "project:existing-recall",
+    "revision": 1,
+    "mode": "go",
+    "title": "推进收藏召回",
+    "intent": "把收藏召回做成可用产品",
+    "candidate_card_ids": [
+      "card:retrieval:001",
+      "card:citation:002"
+    ],
+    "rationale": "两张卡覆盖检索与证据返回。",
+    "matched_project": {
+      "title": "收藏召回",
+      "description": "让积灰收藏在当前问题中重新可用"
+    },
+    "similar_projects": []
+  },
+  "generation": {
+    "provider": "anthropic-compatible",
+    "model": "grounded-chat-model",
+    "latency_ms": 246
+  }
+}

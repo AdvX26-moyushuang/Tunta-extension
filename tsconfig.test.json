@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "isolatedModules": false,
+    "noEmit": false,
+    "outDir": ".test-dist",
+    "rootDir": "src",
+    "types": ["node", "chrome"]
+  },
+  "include": [
+    "src/local/parser.test.ts",
+    "src/local/parser.ts",
+    "src/shared/api/contracts.ts"
+  ]
+}

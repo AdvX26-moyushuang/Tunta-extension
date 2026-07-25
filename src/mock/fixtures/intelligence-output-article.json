@@ -1,0 +1,128 @@
+{
+  "schema_version": "0.1.0",
+  "source_id": "web:example.com:attention-loop",
+  "input": {
+    "parser_schema_version": "0.1.0",
+    "parser_name": "web-parser",
+    "parser_version": "0.1.0",
+    "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "generation": {
+    "job_id": "generate:article:001",
+    "generator_version": "0.1.0",
+    "status": "completed",
+    "generated_at": "2026-07-23T04:01:00Z",
+    "warnings": [],
+    "errors": []
+  },
+  "cards": [
+    {
+      "card_id": "card:insight:001",
+      "card_type": "insight",
+      "title": "收藏的价值发生在再次出现时",
+      "body": "保存只是入口，真正的价值来自内容重新进入注意力和当前行动。",
+      "evidence": [
+        {
+          "block_id": "block:paragraph:001",
+          "quote": "收藏的价值不在于保存，而在于让内容重新进入人的注意力循环。"
+        }
+      ],
+      "graph_node_refs": [
+        "domain:personal-knowledge",
+        "project:tunta"
+      ],
+      "metadata": {}
+    },
+    {
+      "card_id": "card:action:001",
+      "card_type": "action",
+      "title": "给卡片保留回到原文的入口",
+      "body": "展示卡片时同时提供证据 block 和 locator，避免生成另一条不可验证的信息流。",
+      "evidence": [
+        {
+          "block_id": "block:paragraph:002",
+          "quote": "可追溯的卡片可以把原内容带回当前项目"
+        }
+      ],
+      "graph_node_refs": [
+        "domain:personal-knowledge",
+        "project:tunta"
+      ],
+      "metadata": {}
+    }
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "node_id": "card:insight:001",
+        "node_type": "card",
+        "label": "收藏的价值发生在再次出现时",
+        "metadata": {
+          "source_id": "web:example.com:attention-loop"
+        }
+      },
+      {
+        "node_id": "card:action:001",
+        "node_type": "card",
+        "label": "给卡片保留回到原文的入口",
+        "metadata": {
+          "source_id": "web:example.com:attention-loop"
+        }
+      },
+      {
+        "node_id": "domain:personal-knowledge",
+        "node_type": "domain",
+        "label": "个人知识管理",
+        "metadata": {}
+      },
+      {
+        "node_id": "project:tunta",
+        "node_type": "project",
+        "label": "Tunta",
+        "metadata": {}
+      }
+    ],
+    "edges": [
+      {
+        "edge_id": "edge:insight:domain",
+        "edge_type": "belongs_to_domain",
+        "from_node_id": "card:insight:001",
+        "to_node_id": "domain:personal-knowledge",
+        "evidence_block_refs": [
+          "block:paragraph:001"
+        ],
+        "metadata": {}
+      },
+      {
+        "edge_id": "edge:insight:project",
+        "edge_type": "belongs_to_project",
+        "from_node_id": "card:insight:001",
+        "to_node_id": "project:tunta",
+        "evidence_block_refs": [
+          "block:paragraph:001"
+        ],
+        "metadata": {}
+      },
+      {
+        "edge_id": "edge:action:domain",
+        "edge_type": "belongs_to_domain",
+        "from_node_id": "card:action:001",
+        "to_node_id": "domain:personal-knowledge",
+        "evidence_block_refs": [
+          "block:paragraph:002"
+        ],
+        "metadata": {}
+      },
+      {
+        "edge_id": "edge:action:project",
+        "edge_type": "belongs_to_project",
+        "from_node_id": "card:action:001",
+        "to_node_id": "project:tunta",
+        "evidence_block_refs": [
+          "block:paragraph:002"
+        ],
+        "metadata": {}
+      }
+    ]
+  }
+}

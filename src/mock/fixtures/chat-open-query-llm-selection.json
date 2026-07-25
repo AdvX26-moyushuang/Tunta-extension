@@ -1,0 +1,74 @@
+{
+  "schema_version": "0.3.0",
+  "query_id": "query:chat:open-query",
+  "status": "answered",
+  "answer": "最近收藏里值得先看的有两篇：一篇讲如何让收藏重新进入注意力[1]，另一篇把引用定位到原始位置的方法论[2]。",
+  "citations": [
+    {
+      "marker": 1,
+      "card_id": "card:article:001",
+      "source_id": "source:article:001",
+      "block_id": "block:paragraph:002",
+      "quote": "收藏的价值在于让内容重新进入注意力。",
+      "original_url": "https://example.com/bookmarks",
+      "locator": {
+        "kind": "paragraph",
+        "start_ms": null,
+        "end_ms": null,
+        "page_number": null,
+        "paragraph_index": 2,
+        "selector": null
+      }
+    },
+    {
+      "marker": 2,
+      "card_id": "card:citation:002",
+      "source_id": "source:article:001",
+      "block_id": "block:paragraph:005",
+      "quote": "引用要定位到原始 block 或时间戳。",
+      "original_url": "https://example.com/recall",
+      "locator": {
+        "kind": "paragraph",
+        "start_ms": null,
+        "end_ms": null,
+        "page_number": null,
+        "paragraph_index": 5,
+        "selector": null
+      }
+    }
+  ],
+  "retrieved_cards": [
+    {
+      "card_id": "card:article:001",
+      "card_type": "insight",
+      "title": "让收藏重新可用",
+      "body": "收藏需要在具体问题里被召回，并保留回到原始证据的路径。",
+      "domain_labels": [
+        "个人知识管理"
+      ],
+      "score": 0,
+      "matched_by": [
+        "llm"
+      ]
+    },
+    {
+      "card_id": "card:citation:002",
+      "card_type": "method",
+      "title": "引用回到具体位置",
+      "body": "引用要定位到原始 block 或时间戳。",
+      "domain_labels": [
+        "证据追溯"
+      ],
+      "score": 0,
+      "matched_by": [
+        "llm"
+      ]
+    }
+  ],
+  "project_proposal": null,
+  "generation": {
+    "provider": "anthropic-compatible",
+    "model": "grounded-chat-model",
+    "latency_ms": 312
+  }
+}

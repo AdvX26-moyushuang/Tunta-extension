@@ -1,0 +1,101 @@
+/**
+ * 设计 tokens：水獭与水。
+ * water（结构）+ otter（文字与轮廓）承担主体，sun 只做强调点缀。
+ * 尺度收敛成有限档位；边界与层级只由 outline / hairline shadow 两套系统表达。
+ */
+:root {
+  /* Tunta brand palette：水、阳光、水獭与沙滩。 */
+  --brand-sun: #ffe57c;
+  --brand-otter: #775537;
+  --brand-water: #2b7ab3;
+  --brand-sand: #f5f0e8;
+  --brand-water-deep: #215c88;
+  --brand-water-soft: #d8e8f1;
+  --brand-water-pale: #eaf3f7;
+  --brand-otter-soft: #a88a70;
+
+  --paper: #e9e5da;
+  --paper-bright: #f5f1e7;
+  --ink: #151614;
+  --muted: #696b64;
+  --line: rgba(21, 22, 20, 0.18);
+  --line-strong: rgba(21, 22, 20, 0.42);
+  --acid: #d8ff3e;
+  --blue: #425cff;
+  --red: #ff5f4a;
+  --green: #2b9b65;
+
+  /*
+   * Box shadow system
+   *
+   * outline：input、selected、table、divider、focus 与 semantic state。
+   * hairline shadow：Card、Popover、Floating toolbar、Inspector、Modal。
+   *
+   * shadow-rgb 是 brand-otter 的加深色。相比 slate black，它落在沙色纸面上
+   * 不会发灰；水蓝、红与琥珀只负责交互语义，不参与 elevation。
+   */
+  --shadow-rgb: 72 53 39;
+  --focus-rgb: 43 122 179;
+  --error-rgb: 184 79 74;
+  --warning-rgb: 176 105 22;
+
+  /* border / outline：无高度，只给边界和状态。 */
+  --outline-control: 0 0 0 1px rgb(var(--shadow-rgb) / 0.22);
+  --outline-control-strong: 0 0 0 1.5px rgb(var(--shadow-rgb) / 0.52);
+  --outline-selected: 0 0 0 1.5px rgb(var(--focus-rgb) / 0.78);
+  --outline-divider: inset 0 -1px 0 rgb(var(--shadow-rgb) / 0.14);
+  --outline-separator: inset 1px 0 0 rgb(var(--shadow-rgb) / 0.18);
+  --outline-focus:
+    0 0 0 1px rgb(var(--focus-rgb) / 0.86),
+    0 0 0 4px rgb(var(--focus-rgb) / 0.2);
+  --outline-error:
+    0 0 0 1px rgb(var(--error-rgb) / 0.76),
+    0 0 0 4px rgb(var(--error-rgb) / 0.12);
+  --outline-warning:
+    0 0 0 1px rgb(var(--warning-rgb) / 0.72),
+    0 0 0 4px rgb(var(--warning-rgb) / 0.11);
+
+  /* hairline shadow：edge + contact 是共同底座，ambient 只随浮层高度增加。 */
+  --shadow-edge: 0 0 0 1px rgb(var(--shadow-rgb) / 0.1);
+  --shadow-contact: 0 1px 2px rgb(var(--shadow-rgb) / 0.08);
+  --shadow-sm: 0 8px 24px rgb(var(--shadow-rgb) / 0.1);
+  --shadow-md: 0 18px 48px rgb(var(--shadow-rgb) / 0.14);
+  --shadow-lg: 0 30px 72px rgb(var(--shadow-rgb) / 0.18);
+  --shadow-card: var(--shadow-edge), var(--shadow-contact);
+  --shadow-floating: var(--shadow-edge), var(--shadow-contact), var(--shadow-sm);
+  --shadow-overlay: var(--shadow-edge), var(--shadow-contact), var(--shadow-md);
+
+  /* 组件语义 alias：组件只选层级，不自行重写 shadow 数值。 */
+  --shadow-popover: var(--shadow-floating);
+  --shadow-dropdown: var(--shadow-floating);
+  --shadow-floating-toolbar: var(--shadow-floating);
+  --shadow-inspector: var(--shadow-floating);
+  --shadow-modal: var(--shadow-overlay);
+  --shadow-command-palette: var(--shadow-overlay);
+
+  /* 字号阶梯：正文 15，辅助 13，标签 12。低于 12 一律不用。 */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-lg: 17px;
+
+  /* 圆角阶梯：嵌套时外层比内层大一档。 */
+  --r-sm: 10px;
+  --r-md: 16px;
+  --r-lg: 24px;
+  --r-xl: 32px;
+  --r-pill: 999px;
+
+  /* 交互抬升仍是轻量反馈，不进入 overlay 的高度。 */
+  --lift:
+    var(--shadow-contact),
+    0 5px 14px rgb(var(--shadow-rgb) / 0.1);
+
+  --serif: "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, serif;
+  --sans: "Avenir Next", "PingFang SC", "Hiragino Sans GB", sans-serif;
+
+  /* 页面大标题：超粗西文。未装 Inter 时回落到系统 grotesque（macOS 上是 SF Pro）。 */
+  --display: Inter, "Inter Variable", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  /* 标题下的中文说明：超细一档，和超粗西文形成对比 */
+  --sans-cn: "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", sans-serif;
+}

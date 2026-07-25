@@ -1,0 +1,369 @@
+/**
+ * 前端消费的 API 数据模型。
+ *
+ * 两类来源：
+ * 1. 跨模块合同（contracts/）：Chat turn 严格镜像
+ *    `contracts/intelligence-chat/0.3.0/schema.json`（snake_case）。backend
+ *    尚未升级时仍可能交付 0.2.0，schema_version 以联合类型接收。
+ * 2. App 级 payload（library / retrieve / captures / review）：属于
+ *    backend 对 App 的产品接口，沿用 prototype（retrieval-connected-test.html）
+ *    已经消费的 camelCase 形态。App 侧状态（intent / archive / 已读）
+ *    不写回 Intelligence Output。
+ *
+ * backend 尚未实现时，这些类型即 frontend 对 backend 的期望接口，字段调整
+ * 需要在这里和 mock client 同步收口。
+ */
+
+// ---------------------------------------------------------------------------
+// contracts/intelligence-chat/0.3.0（snake_case，镜像 schema；兼容 0.2.0）
+// ---------------------------------------------------------------------------
+
+export type ChatStatus = "answered" | "insufficient_evidence";
+
+export type CardType = "insight" | "quote" | "method" | "question" | "action";
+
+/** 0.3.0 起新增 llm：模型从收藏库概览中直接精选（开放性提问），score 约定为 0。 */
+export type MatchedBy = "vector" | "fts" | "llm";
+
+export interface ChatLocator {
+  kind: "timestamp" | "page" | "paragraph" | "dom" | "unknown";
+  start_ms: number | null;
+  end_ms: number | null;
+  page_number: number | null;
+  paragraph_index: number | null;
+  selector: string | null;
+}
+
+export interface ChatCitation {
+  marker: number;
+  card_id: string;
+  source_id: string;
+  block_id: string;
+  quote: string | null;
+  original_url: string | null;
+  locator: ChatLocator;
+}
+
+export interface RetrievedCard {
+  card_id: string;
+  card_type: CardType;
+  title: string;
+  body: string;
+  domain_labels: string[];
+  score: number;
+  matched_by: MatchedBy[];
+}
+
+export interface ProjectSummary {
+  title: string;
+  description: string;
+}
+
+export interface SimilarProject {
+  project_id: string;
+  title: string;
+  description: string;
+  score: number;
+}
+
+export type ProjectProposalMode = "add" | "go";
+
+export interface ProjectProposal {
+  proposal_id: string;
+  project_id: string;
+  revision: 1;
+  mode: ProjectProposalMode;
+  title: string;
+  intent: string;
+  candidate_card_ids: string[];
+  rationale: string;
+  matched_project: ProjectSummary | null;
+  similar_projects: SimilarProject[];
+}
+
+export interface ChatGeneration {
+  provider: string;
+  model: string;
+  latency_ms: number;
+}
+
+/** contracts/intelligence-chat 的单轮输出（0.3.0；0.2.0 仅差 matched_by 枚举）。 */
+export interface ChatTurn {
+  schema_version: "0.2.0" | "0.3.0";
+  query_id: string;
+  status: ChatStatus;
+  answer: string | null;
+  citations: ChatCitation[];
+  retrieved_cards: RetrievedCard[];
+  project_proposal: ProjectProposal | null;
+  generation: ChatGeneration;
+}
+
+// ---------------------------------------------------------------------------
+// App 级 payload（camelCase，沿用 prototype 消费形态）
+// ---------------------------------------------------------------------------
+
+/** backend 证据解析后的原文 block（对应 Parser Output 的 block）。 */
+export interface SourceBlock {
+  blockId: string;
+  kind: string;
+  text: string;
+  locator: {
+    kind: "timestamp" | "page" | "paragraph" | "dom" | "unknown";
+    startMs?: number;
+    endMs?: number;
+    pageNumber?: number;
+    paragraphIndex?: number;
+    selector?: string;
+  };
+}
+
+export interface LibrarySource {
+  source_id: string;
+  originalUrl: string;
+  metadata: {
+    title?: string;
+    [key: string]: unknown;
+  };
+  blocks: SourceBlock[];
+}
+
+/** 对应 contracts/intelligence-output 的 card，App 侧附加 source 上下文。 */
+export interface LibraryCard {
+  cardId: string;
+  cardType: CardType;
+  title: string;
+  body: string;
+  domainLabels: string[];
+  evidence: { blockId: string; quote?: string | null }[];
+  source?: LibrarySource;
+}
+
+export interface LibraryGraphNode {
+  node_id: string;
+  node_type: "card" | "domain" | "project";
+  label: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface LibraryGraphEdge {
+  edge_id: string;
+  edge_type: "belongs_to_domain" | "belongs_to_project";
+  from_node_id: string;
+  to_node_id: string;
+  evidence_block_refs: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface LibraryResponse {
+  sources: LibrarySource[];
+  cards: LibraryCard[];
+  nodes: LibraryGraphNode[];
+  edges: LibraryGraphEdge[];
+}
+
+// ---------------------------------------------------------------------------
+// Kaleidoscope 万花筒（App 级知识图谱：来源之间的 LLM 关联）
+// ---------------------------------------------------------------------------
+
+/** 万花筒节点：一条收藏来源（文档粒度，卡片数作为节点权重）。 */
+export interface KaleidoscopeNode {
+  sourceId: string;
+  title: string;
+  summary: string | null;
+  platform: string;
+  url: string;
+  cardCount: number;
+}
+
+/** 万花筒边：LLM 在新收藏入库时计算出的来源间实质关联（App 产品数据）。 */
+export interface KaleidoscopeEdge {
+  edgeId: string;
+  fromSourceId: string;
+  toSourceId: string;
+  /** 关系短语（如「同属个人知识管理方法论」） */
+  relation: string;
+  /** 关联强度 0~1 */
+  strength: number;
+  createdAt: string;
+}
+
+export interface KaleidoscopeGraph {
+  nodes: KaleidoscopeNode[];
+  edges: KaleidoscopeEdge[];
+}
+
+/** 重建万花筒关系网络的结果统计（N 个来源产生 N-1 次 provider 调用）。 */
+export interface KaleidoscopeRebuildResult {
+  sources: number;
+  edges: number;
+}
+
+export interface RetrieveHit {
+  card: {
+    cardId: string;
+    cardType: CardType;
+    title: string;
+    body: string;
+    domainLabels: string[];
+  };
+  score: number;
+  matchedBy: MatchedBy[];
+  evidence: {
+    sourceId: string;
+    blocks: SourceBlock[];
+  };
+}
+
+export interface RetrieveResponse {
+  hits: RetrieveHit[];
+  latency_ms: number;
+}
+
+// ---------------------------------------------------------------------------
+// 收藏与回看（App 产品数据）
+// ---------------------------------------------------------------------------
+
+/** 收藏意图：待消化（进入回看队列）或 常用（独立入口，不参与默认清理）。 */
+export type CaptureIntent = "pending" | "favorite";
+
+/**
+ * 处理状态。README 要求对用户可见的五态：idle / fetching / parsing / done / failed。
+ * backend 内部的 ready / archived 也映射到这组 UI 状态。
+ */
+export type CaptureStatus = "idle" | "fetching" | "parsing" | "done" | "failed";
+
+export interface CaptureFailure {
+  code: string;
+  message: string;
+  /** 失败阶段：fetch / parse / generate / store / unknown */
+  stage: string;
+  recoverable: boolean;
+}
+
+export interface CaptureItem {
+  captureId: string;
+  url: string;
+  title: string;
+  intent: CaptureIntent;
+  status: CaptureStatus;
+  sourceId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archived: boolean;
+  failure: CaptureFailure | null;
+  /** AI 策展 / 列表展开结论（如「不产卡片的原因」「已展开为 N 个子收藏」）；有卡片时为空 */
+  curationNote?: string;
+}
+
+export interface SubmitCaptureRequest {
+  url: string;
+  intent: CaptureIntent;
+  note?: string;
+}
+
+/**
+ * 当前页面的即时 DOM 快照（local 模式）：popup 收藏当前页时直接在活动标签页
+ * 执行提取并随收藏提交，后台不再重新打开标签页抓取——用户已加载 / 已滚动
+ * 到的页面状态（含登录态、无限滚动内容）即收藏所得。字段为宽松镜像，
+ * local 侧入库前会收窄校验。
+ */
+export interface PageSnapshotBlock {
+  kind: string;
+  text: string;
+  locator: {
+    kind: string;
+    start_ms?: number | null;
+    end_ms?: number | null;
+    page_number?: number | null;
+    paragraph_index?: number | null;
+    selector?: string | null;
+  };
+}
+
+export interface PageSnapshotWarning {
+  code: string;
+  message: string;
+  stage: "fetch" | "extract" | "transcribe" | "ocr" | "normalize" | "store" | "unknown";
+  recoverable: boolean;
+}
+
+export interface PageSnapshot {
+  finalUrl: string;
+  title: string;
+  platform: string;
+  contentType: "article" | "video" | "audio" | "image_post" | "mixed" | "unknown";
+  blocks: PageSnapshotBlock[];
+  /** 作者（B 站 UP 主等） */
+  author?: string | null;
+  publishedAt?: string | null;
+  /** 列表页（B 站收藏夹等）展开出的子项目链接；非列表页为空 */
+  listLinks?: string[];
+  /** 降级说明（如无字幕视频仅收录标题+简介）：标记需要 helper */
+  degradedNote?: string;
+  /** Parser 可消费但不完整时的结构化 warning；入库后 parse.status 为 partial。 */
+  warnings?: PageSnapshotWarning[];
+}
+
+export interface SubmitCaptureResult {
+  capture: CaptureItem;
+  /** URL 已在库中时不重复入库，返回现有记录。 */
+  duplicate: boolean;
+}
+
+/** 回看队列条目：一张待消化收藏 + 其主卡片与原文入口。 */
+export interface ReviewItem {
+  capture: CaptureItem;
+  card: LibraryCard;
+  originalUrl: string;
+}
+
+export interface ReviewQueueResponse {
+  item: ReviewItem | null;
+  remaining: number;
+}
+
+export interface ConfirmProposalRequest {
+  proposal_id: string;
+  decision: "confirm" | "dismiss";
+}
+
+export interface ConfirmProposalResponse {
+  project_id: string;
+  mode: ProjectProposalMode;
+  title: string;
+  linked_card_ids: string[];
+}
+
+/**
+ * 问答历史条目（App 产品数据，与 swipe / 收藏状态同类，不写回合同）。
+ * 列表展示用摘要；完整 ChatTurn 经 getChatTurn(query_id) 加载。
+ */
+export interface ChatHistoryEntry {
+  query_id: string;
+  query: string;
+  status: ChatStatus;
+  createdAt: string;
+  /** answer 开头片段；insufficient_evidence 时为 null */
+  answerPreview: string | null;
+  citationCount: number;
+}
+
+/**
+ * 运行状态，用于顶栏 runtime chips 与连接指示灯。
+ * backend.mode = local 表示「插件独立模式」：抓取 / 卡片 / 检索 / 问答全部
+ * 在扩展内完成（IndexedDB + 用户配置的 provider），不依赖 helper。
+ */
+export interface BackendStatus {
+  schema_version: string;
+  intelligence: {
+    /** none = 未配置 embedding provider，退化为纯 FTS 检索 */
+    embedding: "real-provider" | "local" | "mock" | "none";
+    embedding_dimensions: number;
+    retrieval: string;
+  };
+  backend: {
+    mode: "real" | "mock" | "local";
+    version: string;
+  };
+}

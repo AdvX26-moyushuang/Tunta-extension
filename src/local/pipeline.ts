@@ -1,0 +1,288 @@
+import type { CaptureFailure } from "@/shared/api/contracts";
+import { generateCardsForDocument } from "./cards";
+import { linkSourceIntoGraph } from "./kaleidoscope";
+import {
+  getCapture,
+  getDocument,
+  listCaptures,
+  listCardsBySource,
+  putCapture,
+  putCards,
+  putDocument,
+  type StoredCapture,
+  type StoredDocument,
+} from "./db";
+import { buildParserOutput, isXiaohongshuUrl } from "./parser";
+import { callEmbedding, ProviderError } from "./provider";
+import { isChatConfigured, isEmbeddingConfigured, loadSettings } from "./settings";
+import { expandListCaptures } from "./expand";
+import { executeSnapshotOnTab, SnapshotError, type SnapshotData } from "./snapshot";
+
+const TAB_LOAD_TIMEOUT_MS = 45_000;
+const STUCK_THRESHOLD_MS = 45_000;
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function waitTabLoaded(tabId: number, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new SnapshotError("FETCH_TIMEOUT", `页面加载超时（${Math.round(timeoutMs / 1000)}s）。`));
+    }, timeoutMs);
+    const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updatedTabId === tabId && info.status === "complete") {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab.status === "complete") {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }).catch(() => undefined);
+  });
+}
+
+
+async function snapshotForUrl(url: string, tabId?: number): Promise<SnapshotData> {
+  if (tabId == null && isXiaohongshuUrl(url)) {
+    throw new SnapshotError(
+      "XHS_ACTIVE_TAB_REQUIRED",
+      "小红书 local 抓取不打开隐藏后台页：请在目标笔记页点击插件主动收藏。",
+      true,
+    );
+  }
+  let targetTabId = tabId ?? null;
+  let created = false;
+  if (targetTabId == null) {
+    const tab = await chrome.tabs.create({ url, active: false });
+    if (tab.id == null) throw new SnapshotError("FETCH_TAB_FAILED", "无法打开后台标签页抓取页面。");
+    targetTabId = tab.id;
+    created = true;
+    try {
+      await waitTabLoaded(targetTabId, TAB_LOAD_TIMEOUT_MS);
+    } catch (cause) {
+      await chrome.tabs.remove(targetTabId).catch(() => undefined);
+      throw cause;
+    }
+  }
+  try {
+    return await executeSnapshotOnTab(targetTabId, url);
+  } catch (cause) {
+    if (cause instanceof SnapshotError) throw cause;
+    const message = cause instanceof Error ? cause.message : String(cause);
+    if (/Cannot access|permission|No tab|cannot be scripted/i.test(message)) {
+      throw new SnapshotError("FETCH_NO_PERMISSION", `没有该页面的访问权限或标签页已关闭：${message}`);
+    }
+    throw new SnapshotError("FETCH_SNAPSHOT_FAILED", `页面快照失败：${message}`);
+  } finally {
+    if (created && targetTabId != null) {
+      await chrome.tabs.remove(targetTabId).catch(() => undefined);
+    }
+  }
+}
+
+
+function toFailure(cause: unknown): CaptureFailure {
+  if (cause instanceof SnapshotError) {
+    return { code: cause.code, message: cause.message, stage: "fetch", recoverable: cause.recoverable };
+  }
+  if (cause instanceof ProviderError) {
+    const stage = cause.code.startsWith("CARDS") || cause.code.startsWith("PROVIDER") ? "generate" : "unknown";
+    return { code: cause.code, message: cause.message, stage, recoverable: true };
+  }
+  return {
+    code: "PIPELINE_UNKNOWN",
+    message: cause instanceof Error ? cause.message : String(cause),
+    stage: "unknown",
+    recoverable: true,
+  };
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const running = new Set<string>();
+
+async function save(capture: StoredCapture): Promise<StoredCapture> {
+  const next = { ...capture, updatedAt: nowIso() };
+  await putCapture(next);
+  return next;
+}
+
+async function execute(captureId: string, tabId?: number): Promise<void> {
+  let capture = await getCapture(captureId);
+  if (!capture || capture.status === "done" || capture.archived) return;
+  const settings = await loadSettings();
+
+  try {
+    
+    if (!capture.stage) {
+      capture = await save({ ...capture, status: "fetching", failure: null });
+      const snapshot = await snapshotForUrl(capture.url, tabId);
+      const output = await buildParserOutput({
+        originalUrl: capture.url,
+        finalUrl: snapshot.finalUrl,
+        title: snapshot.title,
+        platform: snapshot.platform,
+        contentType: snapshot.contentType,
+        blocks: snapshot.blocks,
+        jobId: `job:${capture.captureId}`,
+        author: snapshot.author ?? null,
+        publishedAt: snapshot.publishedAt ?? null,
+        
+        warnings: snapshot.warnings,
+      });
+      const doc: StoredDocument = {
+        sourceId: output.source.source_id,
+        url: output.source.original_url,
+        title: output.source.title ?? capture.url,
+        platform: output.source.platform,
+        contentHash: output.parse.content_hash ?? "",
+        parserOutput: output,
+        createdAt: nowIso(),
+      };
+      await putDocument(doc);
+      capture = await save({
+        ...capture,
+        status: "parsing",
+        stage: "snapshot",
+        sourceId: doc.sourceId,
+        title: doc.title,
+        ...(snapshot.listLinks?.length ? { expandLinks: snapshot.listLinks } : {}),
+        ...(snapshot.degradedNote ? { curationNote: snapshot.degradedNote } : {}),
+      });
+    }
+
+    
+
+    if (capture.stage === "snapshot" && capture.expandLinks && capture.expandLinks.length > 0) {
+      const { createdIds, skipped } = await expandListCaptures({ links: capture.expandLinks, intent: capture.intent });
+      await save({
+        ...capture,
+        stage: "embed",
+        status: "done",
+        curationNote: `列表页：已展开为 ${createdIds.length} 个子收藏（页面共检测到 ${capture.expandLinks.length} 个链接，已在库跳过 ${skipped} 个），子收藏各自独立抓取与策展`,
+      });
+      
+
+      for (const childId of createdIds) {
+        await runPipeline(childId);
+      }
+      return;
+    }
+
+    
+    if (capture.stage === "snapshot") {
+      const doc = capture.sourceId ? await getDocument(capture.sourceId) : undefined;
+      if (!doc) {
+        throw new ProviderError("本地文档缺失，无法生成卡片。", "STORE_DOCUMENT_MISSING");
+      }
+      capture = await save({ ...capture, status: "parsing" });
+      const curation = await generateCardsForDocument(settings, doc);
+      if (curation.cards.length > 0) {
+        await putCards(curation.cards);
+      }
+      
+      if (curation.source.title || curation.source.summary) {
+        await putDocument({
+          ...doc,
+          curatedTitle: curation.source.title ?? doc.curatedTitle,
+          summary: curation.source.summary ?? doc.summary,
+        });
+      }
+      if (!curation.assessment.worthKeeping) {
+        
+        console.info(`[tunta] AI 策展判定不卡片化（${capture.captureId}）：${curation.assessment.reason}`);
+      }
+      capture = await save({
+        ...capture,
+        stage: "cards",
+        title: curation.source.title ?? capture.title,
+        
+        curationNote: curation.assessment.worthKeeping ? capture.curationNote : `AI 策展：${curation.assessment.reason}`,
+      });
+    }
+
+    
+    if (capture.stage === "cards") {
+      if (isEmbeddingConfigured(settings) && capture.sourceId) {
+        try {
+          const cards = await listCardsBySource(capture.sourceId);
+          const pending = cards.filter((card) => !card.embedding);
+          if (pending.length > 0) {
+            const vectors = await callEmbedding(settings.embedding, pending.map((card) => `${card.title}\n${card.body}`));
+            await putCards(pending.map((card, index) => ({ ...card, embedding: vectors[index] })));
+          }
+        } catch (cause) {
+          console.warn("[tunta] embedding 阶段失败（卡片保留 FTS 检索能力）:", cause);
+        }
+      }
+      capture = await save({ ...capture, stage: "embed" });
+    }
+
+    
+    if (capture.stage === "embed") {
+      if (isChatConfigured(settings) && capture.sourceId) {
+        try {
+          const linked = await linkSourceIntoGraph(settings, capture.sourceId);
+          console.info(`[tunta] 万花筒关联完成（${capture.captureId}）：${linked} 条关系边`);
+        } catch (cause) {
+          console.warn("[tunta] 万花筒关联失败（收藏不受影响）:", cause);
+        }
+      }
+      capture = await save({ ...capture, stage: "graph" });
+    }
+
+    await save({ ...capture, status: "done", failure: null });
+  } catch (cause) {
+    const failure = toFailure(cause);
+    const current = await getCapture(captureId);
+    if (current) await save({ ...current, status: "failed", failure });
+    console.warn(`[tunta] pipeline 失败（${captureId}）:`, failure);
+  }
+}
+
+
+export async function runPipeline(captureId: string, options?: { tabId?: number }): Promise<void> {
+  if (running.has(captureId)) return;
+  running.add(captureId);
+  try {
+    await execute(captureId, options?.tabId);
+  } finally {
+    running.delete(captureId);
+  }
+}
+
+
+export async function resumeStuckPipelines(): Promise<void> {
+  const captures = await listCaptures();
+  const cutoff = Date.now() - STUCK_THRESHOLD_MS;
+  const stuck = captures.filter(
+    (capture) =>
+      (capture.status === "idle" || capture.status === "fetching" || capture.status === "parsing") &&
+      !capture.archived &&
+      Date.parse(capture.updatedAt) < cutoff,
+  );
+  for (const capture of stuck) {
+    void runPipeline(capture.captureId);
+  }
+}

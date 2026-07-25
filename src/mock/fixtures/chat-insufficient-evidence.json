@@ -1,0 +1,14 @@
+{
+  "schema_version": "0.2.0",
+  "query_id": "query:chat:insufficient",
+  "status": "insufficient_evidence",
+  "answer": null,
+  "citations": [],
+  "retrieved_cards": [],
+  "project_proposal": null,
+  "generation": {
+    "provider": "anthropic-compatible",
+    "model": "grounded-chat-model",
+    "latency_ms": 0
+  }
+}
