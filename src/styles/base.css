@@ -208,6 +208,7 @@ p {
 .empty-state {
   display: grid;
   min-height: 220px;
+  margin-top: 20px;
   place-items: center;
   padding: 40px;
   border: 1.5px dashed var(--line-strong);

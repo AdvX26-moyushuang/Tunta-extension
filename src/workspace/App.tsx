@@ -75,11 +75,11 @@ function NavIcon({ name }: { name: Page }) {
       </svg>
     );
   }
+  // 设置：三根推子，滑块处断开线条，比原来的圆圈压线更干净
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 8h16M4 16h16" />
-      <circle cx="9.2" cy="8" r="2.5" />
-      <circle cx="15" cy="16" r="2.5" />
+      <path d="M6 3.6v5.2M6 12.4v8M12 3.6v9.6M12 16.8v3.6M18 3.6v2.4M18 10v10.4" />
+      <path d="M3.9 10.6h4.2M9.9 15h4.2M15.9 8.2h4.2" />
     </svg>
   );
 }

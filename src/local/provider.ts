@@ -11,6 +11,33 @@ export class ProviderError extends Error {
 }
 
 export const PROVIDER_NOT_CONFIGURED = "PROVIDER_NOT_CONFIGURED";
+export const PROVIDER_TIMEOUT = "PROVIDER_TIMEOUT";
+
+/**
+ * 单次 provider 调用的硬上限。没有它，被代理链路黑洞掉的请求会一直挂着——
+ * fetch 不 reject、catch 进不去、failure 写不出来，收藏就永久停在 parsing。
+ * 这两个值必须小于 pipeline 的 STUCK_THRESHOLD_MS，否则续跑会撞上还活着的调用。
+ */
+export const CHAT_TIMEOUT_MS = 90_000;
+export const EMBEDDING_TIMEOUT_MS = 30_000;
+
+/** AbortSignal.timeout 抛 TimeoutError；手动 abort 抛 AbortError。两者都算超时。 */
+function isTimeoutError(cause: unknown): boolean {
+  return cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError");
+}
+
+function toNetworkError(cause: unknown, label: string, baseUrl: string, timeoutMs: number): ProviderError {
+  if (isTimeoutError(cause)) {
+    return new ProviderError(
+      `${label} 在 ${Math.round(timeoutMs / 1000)}s 内没有响应（${baseUrl}）：请检查网络，或确认代理链路放行了该地址。`,
+      PROVIDER_TIMEOUT,
+    );
+  }
+  return new ProviderError(
+    `无法连接 ${label}（${baseUrl}）：${cause instanceof Error ? cause.message : String(cause)}`,
+    "PROVIDER_NETWORK",
+  );
+}
 
 interface AnthropicMessageResponse {
   content?: { type?: string; text?: string }[];
@@ -30,6 +57,7 @@ export async function callChatCompletion(
     throw new ProviderError("尚未配置 provider：请在工作台「设置」页填写 API key。", PROVIDER_NOT_CONFIGURED);
   }
   let response: Response;
+  let payload: AnthropicMessageResponse | null;
   try {
     response = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
@@ -44,14 +72,13 @@ export async function callChatCompletion(
         system,
         messages: [{ role: "user", content: user }],
       }),
+
+      signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
     });
+    payload = (await response.json().catch(() => null)) as AnthropicMessageResponse | null;
   } catch (cause) {
-    throw new ProviderError(
-      `无法连接 provider（${baseUrl}）：${cause instanceof Error ? cause.message : String(cause)}`,
-      "PROVIDER_NETWORK",
-    );
+    throw toNetworkError(cause, "provider", baseUrl, CHAT_TIMEOUT_MS);
   }
-  const payload = (await response.json().catch(() => null)) as AnthropicMessageResponse | null;
   if (!response.ok) {
     throw new ProviderError(
       `provider 返回 HTTP ${response.status}：${payload?.error?.message ?? response.statusText}`,
@@ -91,6 +118,7 @@ export async function callEmbedding(config: EmbeddingProviderConfig, inputs: str
   }
   if (inputs.length === 0) return [];
   let response: Response;
+  let payload: OpenAIEmbeddingResponse | null;
   try {
     response = await fetch(`${baseUrl}/embeddings`, {
       method: "POST",
@@ -99,14 +127,12 @@ export async function callEmbedding(config: EmbeddingProviderConfig, inputs: str
         Authorization: `Bearer ${config.apiKey.trim()}`,
       },
       body: JSON.stringify({ model: config.model, input: inputs }),
+      signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
     });
+    payload = (await response.json().catch(() => null)) as OpenAIEmbeddingResponse | null;
   } catch (cause) {
-    throw new ProviderError(
-      `无法连接 embedding provider（${baseUrl}）：${cause instanceof Error ? cause.message : String(cause)}`,
-      "PROVIDER_NETWORK",
-    );
+    throw toNetworkError(cause, "embedding provider", baseUrl, EMBEDDING_TIMEOUT_MS);
   }
-  const payload = (await response.json().catch(() => null)) as OpenAIEmbeddingResponse | null;
   if (!response.ok) {
     throw new ProviderError(
       `embedding provider 返回 HTTP ${response.status}：${payload?.error?.message ?? response.statusText}`,

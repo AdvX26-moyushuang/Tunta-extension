@@ -367,8 +367,11 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
 
   if (!video && bvid) {
     try {
+      // 本函数经 executeScript 注入页面执行，闭包会丢失，超时值只能内联字面量。
+      // 没有 signal 时挂起的请求会把 executeScript 一起吊住，收藏卡在 fetching。
       const response = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
         credentials: "include",
+        signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) {
         metadataApiError = `view API HTTP ${response.status}`;
@@ -422,6 +425,7 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
       try {
         const response = await fetch(`https://api.bilibili.com/x/player/v2?bvid=${bvid}&cid=${cid}`, {
           credentials: "include",
+          signal: AbortSignal.timeout(10_000),
         });
         if (response.ok) {
           const json = (await response.json()) as { data?: { subtitle?: { subtitles?: SubtitleEntry[] } } };
@@ -447,7 +451,10 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
   const subtitleUrl = rawUrl.startsWith("http") ? rawUrl : `https:${rawUrl}`;
   let body: { from?: number; to?: number; content?: string }[];
   try {
-    const response = await fetch(subtitleUrl, { credentials: "include" });
+    const response = await fetch(subtitleUrl, {
+      credentials: "include",
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!response.ok) {
       
       return makeDegraded("subtitle-fetch-failed");

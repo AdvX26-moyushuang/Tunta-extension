@@ -72,9 +72,10 @@ function newCaptureId(): string {
 }
 
 function toPublicCapture(capture: StoredCapture): CaptureItem {
-  const { stage: _stage, expandLinks: _expandLinks, ...rest } = capture;
+  const { stage: _stage, expandLinks: _expandLinks, attempts: _attempts, ...rest } = capture;
   void _stage;
   void _expandLinks;
+  void _attempts;
   return rest;
 }
 
@@ -482,7 +483,8 @@ export function createLocalApi(): TuntaApi {
       const capture = await getCapture(captureId);
       if (!capture) throw new ApiError(`收藏不存在：${captureId}`, 404, "CAPTURE_NOT_FOUND");
       
-      const next = { ...capture, status: "idle" as const, failure: null, updatedAt: nowIso() };
+
+      const next = { ...capture, status: "idle" as const, failure: null, attempts: 0, updatedAt: nowIso() };
       await putCapture(next);
       sendMessage({ type: "tunta:run-pipeline", captureId });
       return toPublicCapture(next);

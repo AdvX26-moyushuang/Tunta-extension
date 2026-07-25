@@ -6,6 +6,8 @@ export interface StoredCapture extends CaptureItem {
   stage?: "snapshot" | "cards" | "embed" | "graph";
   curationNote?: string;
   expandLinks?: string[];
+  /** 自动续跑次数。仅本地流水线使用，不进入对外 CaptureItem。 */
+  attempts?: number;
 }
 
 export interface StoredDocument {
