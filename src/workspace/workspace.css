@@ -1062,12 +1062,31 @@ body {
 }
 
 .capture-intent {
-  padding: 8px 10px;
-  border: 1px solid rgba(119, 85, 55, 0.3);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 26px 6px 11px;
+  overflow: hidden;
+  cursor: pointer;
+  appearance: none;
+  border: 1px solid var(--line);
   border-radius: var(--r-pill);
-  background: var(--brand-sun);
+  outline: 0;
+  /* 原生箭头在 110px 列里会挤掉文字，换成右侧内嵌的 chevron */
+  background:
+    url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23151614' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2.5 4.5 3.5 3.5 3.5-3.5'/%3E%3C/svg%3E")
+      no-repeat right 9px center / 10px 10px,
+    var(--brand-sun);
   color: var(--ink);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capture-intent option {
+  background: var(--paper-bright);
+  color: var(--ink);
 }
 
 .capture-actions {
