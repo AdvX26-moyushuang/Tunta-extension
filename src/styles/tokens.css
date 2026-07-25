@@ -43,8 +43,6 @@
   --outline-control: 0 0 0 1px rgb(var(--shadow-rgb) / 0.22);
   --outline-control-strong: 0 0 0 1.5px rgb(var(--shadow-rgb) / 0.52);
   --outline-selected: 0 0 0 1.5px rgb(var(--focus-rgb) / 0.78);
-  --outline-divider: inset 0 -1px 0 rgb(var(--shadow-rgb) / 0.14);
-  --outline-separator: inset 1px 0 0 rgb(var(--shadow-rgb) / 0.18);
   --outline-focus:
     0 0 0 1px rgb(var(--focus-rgb) / 0.86),
     0 0 0 4px rgb(var(--focus-rgb) / 0.2);

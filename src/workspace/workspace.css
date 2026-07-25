@@ -111,9 +111,6 @@ body {
 }
 
 .shell .empty-state {
-  /* review-stage 的装饰圆环是定位伪元素，空状态必须抬到它上面 */
-  position: relative;
-  z-index: 1;
   border: 1.5px dashed rgba(43, 122, 179, 0.42);
   border-radius: var(--r-lg);
   background: var(--brand-water-pale);
@@ -170,17 +167,14 @@ body {
   height: var(--topbar-height);
   flex: 0 0 auto;
   align-items: center;
-  padding: 0 16px;
-  border-bottom: 1px solid rgba(245, 240, 232, 0.24);
+  padding: 0 14px;
 }
 
-.mark-icon {
-  width: 56px;
-  height: 56px;
-  border: 1.5px solid var(--brand-otter);
-  border-radius: var(--r-md);
-  background: var(--brand-sun);
-  object-fit: cover;
+/* 异形 logo：透明底、无描边无衬底，直接铺满 mark 宽度，不留方块留白 */
+.mark-logo {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
 }
 
 .rail-nav {
@@ -195,20 +189,22 @@ body {
   padding: 0 12px;
 }
 
+/* 设置和连接状态是同一层的辅助信息：并排一行，不用分割线隔开 */
 .rail-bottom {
   position: relative;
   z-index: 1;
   display: flex;
   width: 100%;
   flex: 0 0 auto;
-  flex-direction: column;
   align-items: center;
+  gap: 8px;
+  padding: 0 12px 14px;
 }
 
 .rail-utility-nav {
   display: grid;
-  width: 100%;
-  padding: 0 12px 12px;
+  min-width: 0;
+  flex: 1;
 }
 
 /* 导航常驻展开：图标负责辨认，标题负责说清楚，不再靠 hover tooltip。 */
@@ -271,14 +267,10 @@ body {
 }
 
 .rail-foot {
-  position: relative;
-  z-index: 1;
   display: grid;
-  width: 100%;
-  height: 76px;
   flex: 0 0 auto;
   place-items: center;
-  border-top: 1px solid rgba(245, 240, 232, 0.24);
+  padding-right: 4px;
 }
 
 .connection-dot {
@@ -317,7 +309,6 @@ body {
   padding: 16px 30px 14px;
   background: rgba(245, 240, 232, 0.96);
   backdrop-filter: blur(16px);
-  box-shadow: var(--outline-divider);
 }
 
 .capture-bar {
@@ -455,39 +446,14 @@ body {
 
 /* ---------- review / resurfacing ---------- */
 
+/* 无衬底：卡片直接落在 paper 上，装饰圆环随底色一起去掉 */
 .review-stage {
   position: relative;
   display: grid;
   min-height: calc(100vh - 112px);
-  overflow: hidden;
   margin: 26px 30px 30px;
   padding: 56px 28px;
   place-items: center;
-  border-radius: var(--r-xl);
-  background: var(--brand-water-pale);
-}
-
-.review-stage::before,
-.review-stage::after {
-  position: absolute;
-  border-radius: 50%;
-  content: "";
-}
-
-.review-stage::before {
-  top: -170px;
-  right: -95px;
-  width: 390px;
-  height: 390px;
-  border: 62px solid var(--brand-water-soft);
-}
-
-.review-stage::after {
-  bottom: -130px;
-  left: -90px;
-  width: 290px;
-  height: 290px;
-  border: 46px solid rgba(43, 122, 179, 0.09);
 }
 
 .card-stack {
@@ -550,7 +516,6 @@ body {
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 20px;
-  box-shadow: var(--outline-divider);
   color: var(--muted);
   font-size: var(--text-xs);
 }
@@ -773,7 +738,6 @@ body {
   place-items: center;
   border: 0;
   background: var(--brand-sun);
-  box-shadow: var(--outline-separator);
   color: var(--ink);
   transition: background 140ms ease;
 }
@@ -1159,12 +1123,13 @@ body {
 
 /* ---------- evidence trace ---------- */
 
+/* 和收藏库同一套：底板 + 行卡片 + 间距，靠留白分行而不是分割线 */
 .trace-table {
-  overflow: hidden;
-  border: 0;
+  display: grid;
+  gap: 9px;
+  padding: 14px;
   border-radius: var(--r-lg);
-  background: var(--paper-bright);
-  box-shadow: var(--outline-control);
+  background: var(--brand-water-pale);
 }
 
 .trace-row {
@@ -1173,16 +1138,16 @@ body {
   gap: 20px;
   align-items: start;
   padding: 18px 20px;
-  box-shadow: var(--outline-divider);
+  border-radius: var(--r-md);
+  background: var(--paper-bright);
+  box-shadow: var(--shadow-card);
   font-size: var(--text-sm);
 }
 
-.trace-row:last-child {
-  box-shadow: none;
-}
-
 .trace-row.header {
-  background: var(--brand-water-pale);
+  padding: 6px 20px 8px;
+  background: transparent;
+  box-shadow: none;
   color: var(--brand-water-deep);
   font-size: var(--text-xs);
 }
@@ -1385,7 +1350,6 @@ body {
   justify-content: space-between;
   padding: 22px;
   background: var(--brand-water);
-  box-shadow: var(--outline-divider);
   color: white;
   font-family: var(--serif);
   font-size: 20px;
@@ -1547,7 +1511,6 @@ body {
 .kaleidoscope-panel-meta {
   margin: 0;
   padding-bottom: 14px;
-  box-shadow: var(--outline-divider);
   color: var(--muted);
   font-size: 12px;
 }
@@ -1704,12 +1667,6 @@ body {
     padding: 0 12px;
   }
 
-  .mark-icon {
-    width: 46px;
-    height: 46px;
-    border-radius: var(--r-sm);
-  }
-
   .rail-button {
     min-height: 42px;
     gap: 10px;
@@ -1757,13 +1714,6 @@ body {
 
   .mark {
     padding: 0 10px;
-  }
-
-  .mark-icon {
-    width: 40px;
-    height: 40px;
-    border-width: 1px;
-    border-radius: var(--r-sm);
   }
 
   .rail-button {
