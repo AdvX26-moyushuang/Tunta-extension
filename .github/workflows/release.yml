@@ -1,0 +1,79 @@
+name: Build and Release CRX
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build extension
+        run: pnpm build
+
+      - name: Restore signing key (if exists)
+        id: key
+        run: |
+          if [ -n "${{ secrets.CRX_PRIVATE_KEY }}" ]; then
+            echo "${{ secrets.CRX_PRIVATE_KEY }}" > key.pem
+            echo "Using stored signing key"
+            echo "has_key=true" >> $GITHUB_OUTPUT
+          else
+            echo "No stored key found — a new key will be generated"
+            echo "has_key=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get commit ID
+        id: meta
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "full_sha=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Package CRX
+        run: node scripts/pack-crx.mjs "${{ steps.meta.outputs.short_sha }}"
+
+      - name: Upload key as artifact (first run)
+        if: steps.key.outputs.has_key == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: crx-signing-key
+          path: key.pem
+          retention-days: 1
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.short_sha }}
+          name: ${{ steps.meta.outputs.short_sha }}
+          body: |
+            Automated build from commit [`${{ steps.meta.outputs.short_sha }}`](https://github.com/${{ github.repository }}/commit/${{ steps.meta.outputs.full_sha }}).
+
+            Download the `.crx` file below and drag it into `chrome://extensions` (Developer mode must be enabled).
+          files: TuntaExtension_build_${{ steps.meta.outputs.short_sha }}.crx
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
