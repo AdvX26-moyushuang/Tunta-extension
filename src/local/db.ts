@@ -1,5 +1,6 @@
 import type { CaptureItem, CardType, ChatTurn } from "@/shared/api/contracts";
 import type { ParserOutput } from "./parser";
+import { cardDedupeKey } from "./card-normalize";
 
 
 export interface StoredCapture extends CaptureItem {
@@ -53,7 +54,7 @@ export interface StoredKaleidoscopeEdge {
 }
 
 const DB_NAME = "tunta-local";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -80,6 +81,30 @@ function openDb(): Promise<IDBDatabase> {
         }
         if (!db.objectStoreNames.contains("kaleidoscope_edges")) {
           db.createObjectStore("kaleidoscope_edges", { keyPath: "edgeId" });
+        }
+        const cards = request.transaction?.objectStore("cards");
+        if (cards) {
+          const seenCards = new Set<string>();
+          let removedCount = 0;
+          const cursorRequest = cards.openCursor();
+          cursorRequest.onsuccess = () => {
+            const cursor = cursorRequest.result;
+            if (!cursor) return;
+            const card = cursor.value as StoredCard;
+            const key = cardDedupeKey(card);
+            if (seenCards.has(key)) {
+              removedCount += 1;
+              cursor.delete();
+            } else {
+              seenCards.add(key);
+            }
+            cursor.continue();
+          };
+          request.transaction?.addEventListener("complete", () => {
+            if (removedCount > 0) {
+              console.warn(`[tunta] IndexedDB 升级清理了 ${removedCount} 张重复卡片`);
+            }
+          });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -163,6 +188,29 @@ export async function putCards(cards: StoredCard[]): Promise<void> {
     for (const card of cards) store.put(card);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error ?? new Error("IDB cards bulk put failed"));
+  });
+}
+
+export async function replaceCardsForSource(sourceId: string, cards: StoredCard[]): Promise<void> {
+  if (cards.some((card) => card.sourceId !== sourceId)) {
+    throw new Error(`replaceCardsForSource 收到跨 source 卡片：${sourceId}`);
+  }
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("cards", "readwrite");
+    const store = tx.objectStore("cards");
+    const cursorRequest = store.index("sourceId").openKeyCursor(IDBKeyRange.only(sourceId));
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result;
+      if (cursor) {
+        store.delete(cursor.primaryKey);
+        cursor.continue();
+        return;
+      }
+      for (const card of cards) store.put(card);
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error("IDB cards source replace failed"));
   });
 }
 

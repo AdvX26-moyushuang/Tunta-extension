@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getApi } from "@/shared/api";
 import type { ReviewItem } from "@/shared/api/contracts";
 import { formatTime, hostOf } from "@/shared/format";
@@ -19,6 +19,7 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
   const [item, setItem] = useState<ReviewItem | null>(null);
   const [remaining, setRemaining] = useState(0);
   const [leaving, setLeaving] = useState<"left" | "right" | null>(null);
+  const transitionTimer = useRef<number | null>(null);
 
   const loadNext = useCallback(async () => {
     setState("loading");
@@ -29,6 +30,8 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
       setRemaining(response.remaining);
       setState(response.item ? "ready" : "empty");
     } catch (error) {
+      setItem(null);
+      setRemaining(0);
       setState("empty");
       onToast(`回看队列加载失败：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -36,15 +39,25 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
 
   useEffect(() => {
     void loadNext();
+    return () => {
+      if (transitionTimer.current != null) {
+        window.clearTimeout(transitionTimer.current);
+        transitionTimer.current = null;
+      }
+    };
   }, [loadNext]);
 
   const skip = useCallback(() => {
+    if (state !== "ready" || !item || leaving) return;
     setLeaving("left");
-    window.setTimeout(() => void loadNext(), 210);
-  }, [loadNext]);
+    transitionTimer.current = window.setTimeout(() => {
+      transitionTimer.current = null;
+      void loadNext();
+    }, 210);
+  }, [item, leaving, loadNext, state]);
 
   const archive = useCallback(async () => {
-    if (!item) return;
+    if (state !== "ready" || !item || leaving) return;
     if (item.capture.intent === "favorite" && !window.confirm("这是「常用」内容，确认归档？")) {
       return;
     }
@@ -52,16 +65,20 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
       await getApi().archiveCapture(item.capture.captureId);
       onToast("已归档。");
       setLeaving("right");
-      window.setTimeout(() => void loadNext(), 210);
+      transitionTimer.current = window.setTimeout(() => {
+        transitionTimer.current = null;
+        void loadNext();
+      }, 210);
     } catch (error) {
       onToast(`归档失败：${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [item, loadNext, onToast]);
+  }, [item, leaving, loadNext, onToast, state]);
 
   // 键盘：← 下一条，→ 归档（不在输入框聚焦时）
   useEffect(() => {
     const onKeydown = (event: KeyboardEvent) => {
       if ((event.target as HTMLElement | null)?.matches("input, textarea, select")) return;
+      if (state !== "ready" || !item || leaving) return;
       if (event.key === "ArrowLeft") {
         event.preventDefault();
         skip();
@@ -73,7 +90,7 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
     };
     window.addEventListener("keydown", onKeydown);
     return () => window.removeEventListener("keydown", onKeydown);
-  }, [skip, archive]);
+  }, [archive, item, leaving, skip, state]);
 
   return (
     <section className="page">
@@ -126,11 +143,16 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
                 <span>查看原文</span>
                 <span className="keycap">↗</span>
               </button>
-              <button type="button" className="action-button secondary" onClick={skip}>
+              <button type="button" className="action-button secondary" onClick={skip} disabled={leaving != null}>
                 <span>下一条</span>
                 <span className="keycap">←</span>
               </button>
-              <button type="button" className="action-button keep" onClick={() => void archive()}>
+              <button
+                type="button"
+                className="action-button keep"
+                onClick={() => void archive()}
+                disabled={leaving != null}
+              >
                 <span>归档</span>
                 <span className="keycap">→</span>
               </button>

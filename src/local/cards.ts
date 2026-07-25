@@ -3,6 +3,7 @@ import type { StoredCard, StoredDocument } from "./db";
 import type { ParserBlock } from "./parser";
 import { callChatCompletion, ProviderError } from "./provider";
 import type { LocalSettings } from "./settings";
+import { deduplicateCards, type CardWithoutId } from "./card-normalize";
 
 const CARD_TYPES: CardType[] = ["insight", "quote", "method", "question", "action"];
 
@@ -80,7 +81,7 @@ const CURATION_SYSTEM_PROMPT = `你是 Tunta 收藏库的策展人。用户收�
 {"source":{"title":"来源标题","summary":"一句话摘要"},"assessment":{"worth_keeping":true或false,"reason":"一句话理由"},"cards":[{"card_type":"insight|quote|method|question|action","title":"卡片标题","body":"卡片正文（忠于原文，可适度压缩）","evidence_block_ids":["block:paragraph:001"],"domain_labels":["标签"]}]}
 worth_keeping=false 时 cards 输出空数组。`;
 
-function toValidCard(raw: unknown, blocks: ParserBlock[], doc: StoredDocument, index: number): StoredCard | null {
+function toValidCard(raw: unknown, blocks: ParserBlock[], doc: StoredDocument): CardWithoutId | null {
   const candidate = raw as RawGeneratedCard;
   if (typeof candidate?.title !== "string" || !candidate.title.trim()) return null;
   if (typeof candidate?.body !== "string" || !candidate.body.trim()) return null;
@@ -94,7 +95,6 @@ function toValidCard(raw: unknown, blocks: ParserBlock[], doc: StoredDocument, i
     ? candidate.domain_labels.filter((label): label is string => typeof label === "string" && label.trim().length > 0).slice(0, 3)
     : [];
   return {
-    cardId: `card:${doc.sourceId}:${String(index + 1).padStart(2, "0")}`,
     sourceId: doc.sourceId,
     cardType,
     title: candidate.title.trim(),
@@ -146,10 +146,17 @@ export async function generateCardsForDocument(settings: LocalSettings, doc: Sto
     return { source, assessment: { worthKeeping: false, reason: reason || "策展人判定内容不值得卡片化。" }, cards: [] };
   }
   const rawCards = Array.isArray(raw.cards) ? raw.cards : [];
-  const cards = rawCards
+  const validCards = rawCards
     .slice(0, MAX_CARDS_PER_DOC)
-    .map((item, index) => toValidCard(item, blocks, doc, index))
-    .filter((card): card is StoredCard => card !== null);
+    .map((item) => toValidCard(item, blocks, doc))
+    .filter((card): card is CardWithoutId => card !== null);
+  const normalized = deduplicateCards(validCards, doc.sourceId);
+  const cards = normalized.cards;
+  if (normalized.duplicateCount > 0) {
+    console.warn(
+      `[tunta] 策展结果包含重复卡片（${doc.sourceId}）：已移除 ${normalized.duplicateCount} 张`,
+    );
+  }
   if (cards.length === 0) {
     
     throw new ProviderError("策展结果为有价值内容，但生成的卡片全部无效（标题/正文/证据缺失）。", "CARDS_ALL_INVALID");

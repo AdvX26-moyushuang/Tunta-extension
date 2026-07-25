@@ -56,6 +56,7 @@ import {
 } from "./parser";
 import { callEmbedding } from "./provider";
 import { retrieveCards } from "./retrieve";
+import { chooseReviewCandidate, createSingleFlight } from "./review";
 import { ensureOriginPermission, isChatConfigured, isEmbeddingConfigured, loadSettings } from "./settings";
 
 function nowIso(): string {
@@ -241,11 +242,56 @@ function saveReviewSeen(seen: Set<string>): void {
   globalThis.localStorage?.setItem(REVIEW_SEEN_KEY, JSON.stringify([...seen]));
 }
 
+async function loadLocalReviewNext(): Promise<ReviewQueueResponse> {
+  const seen = loadReviewSeen();
+  const captures = (await listCaptures()).filter(
+    (capture) =>
+      capture.intent === "pending" &&
+      !capture.archived &&
+      capture.status === "done" &&
+      !seen.has(capture.captureId),
+  );
+  const cardsByCapture = await Promise.all(
+    captures.map((capture) => (capture.sourceId ? listCardsBySource(capture.sourceId) : Promise.resolve([]))),
+  );
+  const selection = chooseReviewCandidate(
+    captures.map((capture, index) => ({
+      capture: toPublicCapture(capture),
+      cards: cardsByCapture[index],
+    })),
+    seen,
+  );
+  if (!selection.candidate) {
+    return { item: null, remaining: 0 };
+  }
+
+  saveReviewSeen(selection.seen);
+  const { capture, cards } = selection.candidate;
+  const doc = capture.sourceId ? await getDocument(capture.sourceId) : undefined;
+  const first = cards[0];
+  return {
+    item: {
+      capture,
+      card: {
+        cardId: first.cardId,
+        cardType: first.cardType,
+        title: first.title,
+        body: first.body,
+        domainLabels: first.domainLabels,
+        evidence: first.evidence,
+        source: doc ? sourceWithCuration(doc) : undefined,
+      },
+      originalUrl: capture.url,
+    },
+    remaining: selection.remaining,
+  };
+}
 
 
 
 
 export function createLocalApi(): TuntaApi {
+  const getReviewNext = createSingleFlight(loadLocalReviewNext);
   return {
     getStatus: async (): Promise<BackendStatus> => {
       const settings = await loadSettings();
@@ -496,46 +542,7 @@ export function createLocalApi(): TuntaApi {
       await putCapture({ ...capture, archived: true, updatedAt: nowIso() });
     },
 
-    getReviewNext: async (): Promise<ReviewQueueResponse> => {
-      const seen = loadReviewSeen();
-      const candidates = (await listCaptures()).filter(
-        (capture) =>
-          capture.intent === "pending" && !capture.archived && capture.status === "done" && !seen.has(capture.captureId),
-      );
-      
-
-      const cardsByCapture = await Promise.all(
-        candidates.map((capture) => (capture.sourceId ? listCardsBySource(capture.sourceId) : Promise.resolve([]))),
-      );
-      const pool = candidates.filter((_, index) => cardsByCapture[index].length > 0);
-      if (pool.length === 0) {
-        saveReviewSeen(new Set());
-        return { item: null, remaining: 0 };
-      }
-      const captureIndex = Math.floor(Math.random() * pool.length);
-      const capture = pool[captureIndex];
-      seen.add(capture.captureId);
-      saveReviewSeen(seen);
-      const cards = cardsByCapture[candidates.indexOf(capture)];
-      const doc = capture.sourceId ? await getDocument(capture.sourceId) : undefined;
-      const first = cards[0];
-      const item = first
-        ? {
-            capture: toPublicCapture(capture),
-            card: {
-              cardId: first.cardId,
-              cardType: first.cardType,
-              title: first.title,
-              body: first.body,
-              domainLabels: first.domainLabels,
-              evidence: first.evidence,
-              source: doc ? sourceWithCuration(doc) : undefined,
-            },
-            originalUrl: capture.url,
-          }
-        : null;
-      return { item, remaining: pool.length - 1 };
-    },
+    getReviewNext,
 
     confirmProposal: async (): Promise<ConfirmProposalResponse> => {
       

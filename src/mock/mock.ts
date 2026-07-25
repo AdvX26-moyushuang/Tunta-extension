@@ -29,6 +29,7 @@ import type {
   SubmitCaptureRequest,
   SubmitCaptureResult,
 } from "@/shared/api/contracts";
+import { chooseReviewCandidate, createSingleFlight } from "@/local/review";
 
 import articleOutput from "./fixtures/intelligence-output-article.json";
 import chatAnsweredGo from "./fixtures/chat-answered-proposal-go.json";
@@ -308,16 +309,6 @@ export function createMockApi(): TuntaApi {
     }, 2300);
   }
 
-  function pendingReviewPool(): CaptureItem[] {
-    return captures.filter(
-      (item) =>
-        item.intent === "pending" &&
-        !item.archived &&
-        item.status === "done" &&
-        !reviewSeen.has(item.captureId),
-    );
-  }
-
   function cardForCapture(capture: CaptureItem): LibraryCard | null {
     if (capture.sourceId) {
       const card = library.cards.find((item) => item.source?.source_id === capture.sourceId);
@@ -325,6 +316,31 @@ export function createMockApi(): TuntaApi {
     }
     return library.cards[0] ?? null;
   }
+
+  const getReviewNext = createSingleFlight(() => {
+    const selection = chooseReviewCandidate(
+      captures.map((capture) => {
+        const card = cardForCapture(capture);
+        return { capture, cards: card ? [card] : [] };
+      }),
+      reviewSeen,
+    );
+    if (!selection.candidate) {
+      return delay<ReviewQueueResponse>({ item: null, remaining: 0 });
+    }
+
+    reviewSeen.add(selection.candidate.capture.captureId);
+    const capture = selection.candidate.capture;
+    const card = selection.candidate.cards[0];
+    return delay<ReviewQueueResponse>({
+      item: {
+        capture: { ...capture },
+        card: structuredClone(card),
+        originalUrl: card.source?.originalUrl ?? capture.url,
+      },
+      remaining: selection.remaining,
+    });
+  });
 
   const api: TuntaApi = {
     getStatus: () =>
@@ -437,24 +453,7 @@ export function createMockApi(): TuntaApi {
       return delay(undefined);
     },
 
-    getReviewNext: () => {
-      const pool = pendingReviewPool();
-      if (pool.length === 0) {
-        reviewSeen.clear();
-        return delay<ReviewQueueResponse>({ item: null, remaining: 0 });
-      }
-      const capture = pool[Math.floor(Math.random() * pool.length)];
-      reviewSeen.add(capture.captureId);
-      const card = cardForCapture(capture);
-      const item = card
-        ? {
-            capture: { ...capture },
-            card: structuredClone(card),
-            originalUrl: card.source?.originalUrl ?? capture.url,
-          }
-        : null;
-      return delay<ReviewQueueResponse>({ item, remaining: pool.length - 1 });
-    },
+    getReviewNext,
 
     confirmProposal: (request) => {
       const mode: ProjectProposalMode = chatAnsweredGo.project_proposal.mode as ProjectProposalMode;
