@@ -212,6 +212,8 @@ body {
   display: grid;
   min-width: 0;
   flex: 1;
+  max-width: 100px;
+  padding-right: 50px;
 }
 
 /* 导航常驻展开：图标负责辨认，标题负责说清楚，不再靠 hover tooltip。 */
@@ -352,12 +354,16 @@ body {
 }
 
 .capture-bar select {
-  padding: 9px 30px 9px 12px;
+  padding: 9px 38px 9px 12px;
+  appearance: none;
   cursor: pointer;
   border: 0;
   border-radius: var(--r-md);
   outline: 0;
-  background: var(--paper-bright);
+  background:
+    url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23151614' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2.5 4.5 3.5 3.5 3.5-3.5'/%3E%3C/svg%3E")
+      no-repeat right 13px center / 10px 10px,
+    var(--paper-bright);
   box-shadow: var(--outline-control);
   color: var(--ink);
   font-size: var(--text-xs);
@@ -480,7 +486,7 @@ body {
   z-index: 1;
   display: grid;
   width: min(652px, calc(100% - 28px));
-  margin-bottom: 100px;
+  margin-bottom: 50px;
   place-items: center;
 }
 
@@ -578,12 +584,18 @@ body {
 }
 
 .domain-pill {
+  display: inline-block;
+  width: fit-content;
+  max-width: min(100%, 240px);
   padding: 7px 11px;
+  overflow: hidden;
   border: 1px solid rgba(43, 122, 179, 0.3);
   border-radius: var(--r-pill);
   background: var(--brand-water-pale);
   color: var(--brand-water-deep);
   font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 证据条是入口而不是展示：整条可点，只露 source_id + 域名，不裸露 URL。 */
@@ -1056,7 +1068,13 @@ body {
 
 .capture-row {
   display: grid;
-  grid-template-columns: minmax(200px, 1.2fr) minmax(160px, 1fr) 110px 100px 90px minmax(0, auto);
+  grid-template-columns:
+    minmax(0, 230px)
+    minmax(0, 150px)
+    minmax(96px, 110px)
+    minmax(96px, 105px)
+    minmax(84px, 90px)
+    minmax(64px, 115px);
   gap: 16px;
   align-items: center;
   padding: 16px;
@@ -1065,6 +1083,11 @@ body {
   background: var(--paper-bright);
   box-shadow: var(--shadow-card);
   font-size: var(--text-xs);
+}
+
+.capture-row > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .capture-row.header {
@@ -1076,7 +1099,14 @@ body {
   font-size: var(--text-xs);
 }
 
+.capture-row.header > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .capture-title {
+  overflow-wrap: anywhere;
   font-weight: 700;
 }
 
@@ -1092,17 +1122,17 @@ body {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  padding: 6px 26px 6px 11px;
+  padding: 6px 34px 6px 11px;
   overflow: hidden;
   cursor: pointer;
   appearance: none;
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
   outline: 0;
-  /* 原生箭头在 110px 列里会挤掉文字，换成右侧内嵌的 chevron */
+  /* 原生箭头在 110px 列里会挤掉文字，换成留足右侧呼吸区的内嵌 chevron */
   background:
     url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23151614' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2.5 4.5 3.5 3.5 3.5-3.5'/%3E%3C/svg%3E")
-      no-repeat right 9px center / 10px 10px,
+      no-repeat right 12px center / 10px 10px,
     var(--brand-sun);
   color: var(--ink);
   font-size: var(--text-xs);
@@ -1118,7 +1148,9 @@ body {
 
 .capture-actions {
   display: flex;
+  min-width: 0;
   gap: 7px;
+  flex-wrap: wrap;
 }
 
 .capture-actions .btn {
@@ -1132,6 +1164,15 @@ body {
   color: var(--muted);
   font-size: var(--text-sm);
   line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.capture-row > .status-chip {
+  width: 100%;
+  justify-content: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .capture-failure {
@@ -1668,7 +1709,8 @@ body {
   }
 
   .capture-row {
-    grid-template-columns: minmax(200px, 1fr) 100px 100px minmax(0, auto);
+    grid-template-columns: minmax(0, 320px) 110px 105px minmax(64px, 115px);
+    justify-content: space-between;
   }
 
   .capture-row > :nth-child(2),
@@ -1724,7 +1766,8 @@ body {
   }
 
   .capture-row {
-    grid-template-columns: minmax(0, 1fr) 100px minmax(0, auto);
+    grid-template-columns: minmax(0, 360px) 105px minmax(64px, 115px);
+    justify-content: space-between;
   }
 
   .capture-row > :nth-child(3) {
@@ -1862,7 +1905,7 @@ body {
   }
 
   .capture-row {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) minmax(64px, 115px);
     gap: 10px;
     padding: 13px;
   }
