@@ -15,6 +15,11 @@ export interface Chunk {
 export const CHUNK_TARGET_CHARS = 400;
 export const CHUNK_MAX_CHARS = 500;
 
+/** 从 chunkId 反解 sourceId。sourceId 本身可含冒号（如 bilibili:BV…），只能去头去尾。 */
+export function chunkSourceId(chunkId: string): string {
+  return chunkId.slice("chunk:".length, chunkId.lastIndexOf(":"));
+}
+
 /**
  * 把连续 block 聚合成 chunk。chunkId 由 sourceId + 序号确定性生成：
  * 同一文档重跑得到相同 id，embed 前查表去重才能命中（禁止对同一 source 重复 embed）。

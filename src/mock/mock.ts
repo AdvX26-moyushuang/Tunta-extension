@@ -366,6 +366,7 @@ export function createMockApi(): TuntaApi {
     retrieve: (query, topK = 8) => {
       void query;
       const hits = library.cards.slice(0, topK).map((card, index) => ({
+        kind: "card" as const,
         card: {
           cardId: card.cardId,
           cardType: card.cardType,

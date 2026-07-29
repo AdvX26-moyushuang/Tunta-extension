@@ -23,10 +23,12 @@ import { isExtensionContext } from "@/shared/browser";
 import { normalizeUrl } from "@/shared/format";
 import { sendMessage } from "@/shared/messages";
 import { runChatTurn, selectCardsForOpenQuery } from "./chat";
+import { chunkSourceId } from "./chunk";
 import { rebuildAllGraphLinks } from "./kaleidoscope";
 import {
   getStore,
   type StoredCapture,
+  type StoredChunk,
   type StoredDocument,
 } from "./store";
 import {
@@ -41,7 +43,7 @@ import {
   type ParserProblem,
 } from "./parser";
 import { callEmbedding } from "./provider";
-import { FTS_CANDIDATES, retrieveCards } from "./retrieve";
+import { CHUNK_VECTOR_CANDIDATES, FTS_CANDIDATES, retrieveHits, type ChunkVectorHit } from "./retrieve";
 import { chooseReviewCandidate, createSingleFlight } from "./review";
 import { ensureOriginPermission, isChatConfigured, isEmbeddingConfigured, loadSettings } from "./settings";
 
@@ -50,6 +52,25 @@ function nowIso(): string {
 }
 
 const OPEN_QUERY_PATTERN = /有什么|有没有|推荐|新鲜|最近|随便|看点|啥|值得|interesting|recommend/i;
+
+/** chunk 向量召回：查 embeddings 表拿 chunkId 排名，再回 chunks 表取正文。失败只降级不断检索。 */
+async function searchChunkHits(queryEmbedding: number[], model: string): Promise<ChunkVectorHit[]> {
+  try {
+    const hits = await getStore().searchEmbeddings(queryEmbedding, model, CHUNK_VECTOR_CANDIDATES, "chunk");
+    if (hits.length === 0) return [];
+    const chunkById = new Map<string, StoredChunk>();
+    for (const sourceId of new Set(hits.map((hit) => chunkSourceId(hit.ownerId)))) {
+      for (const chunk of await getStore().listChunksBySource(sourceId)) chunkById.set(chunk.chunkId, chunk);
+    }
+    return hits.flatMap((hit) => {
+      const chunk = chunkById.get(hit.ownerId);
+      return chunk ? [{ chunk, score: hit.score }] : []; // 防御：向量引用的 chunk 已被重新聚合淘汰
+    });
+  } catch (cause) {
+    console.warn("[tunta] chunk 向量召回失败，降级为卡片召回:", cause);
+    return [];
+  }
+}
 
 let captureCounter = 0;
 
@@ -334,19 +355,40 @@ export function createLocalApi(): TuntaApi {
         loadSettings(),
       ]);
       let queryEmbedding: number[] | null = null;
+      let chunkHits: ChunkVectorHit[] = [];
       if (isEmbeddingConfigured(settings)) {
         try {
           [queryEmbedding] = await callEmbedding(settings.embedding, [query]);
         } catch (cause) {
           console.warn("[tunta] 查询向量化失败，退化为纯 FTS:", cause);
         }
+        if (queryEmbedding) chunkHits = await searchChunkHits(queryEmbedding, settings.embedding.model);
       }
-      const hits = retrieveCards(cards, ftsHits, topK, queryEmbedding);
+      const hits = retrieveHits(cards, ftsHits, chunkHits, topK, queryEmbedding);
       const documents = new Map((await getStore().listDocuments()).map((doc) => [doc.sourceId, doc]));
       return {
         hits: hits.map((hit) => {
+          if (hit.kind === "chunk") {
+            const doc = documents.get(hit.chunk.sourceId);
+            return {
+              kind: "chunk" as const,
+              chunk: {
+                chunkId: hit.chunk.chunkId,
+                sourceId: hit.chunk.sourceId,
+                text: hit.chunk.text,
+                blockIds: hit.chunk.blockIds,
+              },
+              score: hit.score,
+              matchedBy: hit.matchedBy,
+              evidence: {
+                sourceId: hit.chunk.sourceId,
+                blocks: doc ? parserOutputToSource(doc.parserOutput).blocks : [],
+              },
+            };
+          }
           const doc = documents.get(hit.card.sourceId);
           return {
+            kind: "card" as const,
             card: {
               cardId: hit.card.cardId,
               cardType: hit.card.cardType,
@@ -373,14 +415,16 @@ export function createLocalApi(): TuntaApi {
       }
       const [cards, ftsHits] = await Promise.all([getStore().listCards(), getStore().searchCardsFts(query, FTS_CANDIDATES)]);
       let queryEmbedding: number[] | null = null;
+      let chunkHits: ChunkVectorHit[] = [];
       if (isEmbeddingConfigured(settings)) {
         try {
           [queryEmbedding] = await callEmbedding(settings.embedding, [query]);
         } catch (cause) {
           console.warn("[tunta] 查询向量化失败，退化为纯 FTS:", cause);
         }
+        if (queryEmbedding) chunkHits = await searchChunkHits(queryEmbedding, settings.embedding.model);
       }
-      let hits = retrieveCards(cards, ftsHits, 6, queryEmbedding);
+      let hits = retrieveHits(cards, ftsHits, chunkHits, 6, queryEmbedding);
       
       if (cards.length > 0 && (OPEN_QUERY_PATTERN.test(query) || hits.length < 2)) {
         const curated = await selectCardsForOpenQuery(settings, cards, query);

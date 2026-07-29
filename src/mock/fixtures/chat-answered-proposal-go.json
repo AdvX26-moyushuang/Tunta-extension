@@ -6,6 +6,7 @@
   "citations": [
     {
       "marker": 1,
+      "source_kind": "card",
       "card_id": "card:retrieval:001",
       "source_id": "source:article:001",
       "block_id": "block:paragraph:003",

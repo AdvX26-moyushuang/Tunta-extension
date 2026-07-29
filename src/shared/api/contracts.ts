@@ -34,9 +34,15 @@ export interface ChatLocator {
   selector: string | null;
 }
 
+/** 引用证据的来源层级：card = 已提炼卡片；chunk = 原文片段（未经提炼）兜底。 */
+export type CitationSourceKind = "card" | "chunk";
+
 export interface ChatCitation {
   marker: number;
-  card_id: string;
+  /** 本地扩展字段（schema 0.3.0 尚未收录）；存量历史 turn 缺失时按 "card" 处理。 */
+  source_kind: CitationSourceKind;
+  /** source_kind 为 chunk 时为 null（命中的是原文片段，不对应任何卡片）。 */
+  card_id: string | null;
   source_id: string;
   block_id: string;
   quote: string | null;
@@ -199,21 +205,42 @@ export interface KaleidoscopeRebuildResult {
   edges: number;
 }
 
-export interface RetrieveHit {
-  card: {
-    cardId: string;
-    cardType: CardType;
-    title: string;
-    body: string;
-    domainLabels: string[];
-  };
-  score: number;
-  matchedBy: MatchedBy[];
-  evidence: {
-    sourceId: string;
-    blocks: SourceBlock[];
-  };
-}
+/**
+ * 检索命中的联合形态：card 是已过质量判断的提炼结果，chunk 是
+ * 「AI 没提炼但原文有」的兜底（同分时卡片排在 chunk 前）。
+ */
+export type RetrieveHit =
+  | {
+      kind: "card";
+      card: {
+        cardId: string;
+        cardType: CardType;
+        title: string;
+        body: string;
+        domainLabels: string[];
+      };
+      score: number;
+      matchedBy: MatchedBy[];
+      evidence: {
+        sourceId: string;
+        blocks: SourceBlock[];
+      };
+    }
+  | {
+      kind: "chunk";
+      chunk: {
+        chunkId: string;
+        sourceId: string;
+        text: string;
+        blockIds: string[];
+      };
+      score: number;
+      matchedBy: MatchedBy[];
+      evidence: {
+        sourceId: string;
+        blocks: SourceBlock[];
+      };
+    };
 
 export interface RetrieveResponse {
   hits: RetrieveHit[];

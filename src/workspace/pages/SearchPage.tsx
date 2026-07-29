@@ -369,7 +369,10 @@ function GenerationMeta({ turn }: { turn: ChatTurn }) {
 function ResultsView({ turn }: { turn: ChatTurn }) {
   const citationByCard = useMemo(() => {
     const map = new Map<string, ChatCitation>();
-    turn.citations.forEach((citation) => map.set(citation.card_id, citation));
+    turn.citations.forEach((citation) => {
+      // chunk 命中的 citation 没有 card_id（展示适配在 Task2.3c）
+      if (citation.card_id) map.set(citation.card_id, citation);
+    });
     return map;
   }, [turn.citations]);
 
