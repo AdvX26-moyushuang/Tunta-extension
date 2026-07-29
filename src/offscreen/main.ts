@@ -15,6 +15,9 @@ import {
 import type { DbWorkerHost } from "./db-worker";
 
 const worker = new Worker(new URL("./db-worker.ts", import.meta.url), { type: "module" });
+worker.addEventListener("error", (event) => {
+  console.error("[tunta] db-worker 崩溃:", event.message);
+});
 const remote = Comlink.wrap<DbWorkerHost>(worker);
 // Comlink 的 path proxy 支持 remote.store.method(...) 链式调用，但 Remote<T> 把 getter
 // 映射成 Promise，无法直接索引；这里断言成可调用面，运行时语义不变。

@@ -17,7 +17,7 @@ import {
 } from "@/local/settings";
 import { testChatConnection, testEmbeddingConnection } from "@/local/provider";
 import { exportDbBytes, importDbBytes } from "@/local/store/db-admin";
-import { isMigrated } from "@/local/store/migrate";
+import { readMigrationState, type MigrationState } from "@/local/store/migrate";
 
 type TestState = { status: "idle" | "testing" | "ok" | "fail"; message: string };
 
@@ -29,15 +29,17 @@ export function SettingsPage({ onToast, onSaved }: { onToast: (message: string) 
   const [clearing, setClearing] = useState(false);
   const [chatTest, setChatTest] = useState<TestState>(IDLE_TEST);
   const [embeddingTest, setEmbeddingTest] = useState<TestState>(IDLE_TEST);
-  // 导出/导入只在数据已迁移到 SQLite 后可用（迁移前数据还在 IndexedDB）
-  const [sqliteReady, setSqliteReady] = useState(false);
+  // 导出/导入只在数据已迁移到 SQLite 后可用（迁移前数据还在 IndexedDB）；
+  // 迁移失败时把 lastError 直接展示出来，不让它沉默在 storage 里
+  const [migration, setMigration] = useState<MigrationState | null>(null);
+  const sqliteReady = Boolean(migration?.migratedAt);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     void loadSettings().then(setSettings);
-    void isMigrated().then(setSqliteReady);
+    void readMigrationState().then(setMigration);
   }, []);
 
   const updateChat = useCallback((patch: Partial<LocalSettings["chat"]>) => {
@@ -296,8 +298,12 @@ export function SettingsPage({ onToast, onSaved }: { onToast: (message: string) 
                 }}
               />
             </div>
-            {!sqliteReady && (
-              <p className="settings-hint">导出/导入将在数据迁移到新存储引擎后可用（重启浏览器后自动完成）。</p>
+            {migration && !sqliteReady && (
+              <p className="settings-hint">
+                {migration.lastError
+                  ? `导出/导入暂不可用——数据迁移遇到问题：${migration.lastError}（重载扩展后会自动重试）`
+                  : "导出/导入将在数据迁移到新存储引擎后可用（重载扩展或重启浏览器后自动完成）。"}
+              </p>
             )}
             <button type="button" className="btn btn-danger" onClick={() => void clearLibrary()} disabled={clearing}>
               {clearing ? "清空中…" : "清空知识库"}
