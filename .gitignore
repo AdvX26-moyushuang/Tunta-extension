@@ -48,3 +48,5 @@ pnpm-debug.log*
 ._*
 Thumbs.db
 desktop.ini
+
+/local/
