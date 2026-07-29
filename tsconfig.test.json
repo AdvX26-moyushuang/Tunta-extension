@@ -7,5 +7,5 @@
     "rootDir": "src",
     "types": ["node", "chrome"]
   },
-  "include": ["src/local/*.test.ts"]
+  "include": ["src/local/**/*.test.ts"]
 }
