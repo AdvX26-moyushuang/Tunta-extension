@@ -42,6 +42,16 @@ export interface ParserProblem {
   details?: Record<string, unknown>;
 }
 
+export interface ParserAsset {
+  asset_id: string;
+  kind: "image" | "video" | "audio";
+  url: string | null;
+  blob_ref: string | null;   // Phase 4 用
+  ocr_text: string | null;
+  caption: string | null;
+  metadata: Record<string, unknown>;
+}
+
 export interface ParserOutput {
   schema_version: "0.1.0";
   source: {
@@ -58,7 +68,7 @@ export interface ParserOutput {
     raw_content_ref: string | null;
   };
   blocks: ParserBlock[];
-  assets: [];
+  assets: ParserAsset[];
   parse: {
     job_id: string;
     parser_name: string;
