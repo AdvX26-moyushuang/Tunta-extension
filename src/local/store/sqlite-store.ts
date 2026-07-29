@@ -2,10 +2,13 @@ import { ensureOffscreen } from "@/offscreen/host";
 import { DB_RPC_TARGET, type DbMethod, type DbRpcResponse } from "@/shared/db-rpc";
 import type {
   CardFtsHit,
+  EmbeddingHit,
+  EmbeddingModelInfo,
   StoredCapture,
   StoredCard,
   StoredChatTurn,
   StoredDocument,
+  StoredEmbedding,
   StoredKaleidoscopeEdge,
   TuntaStore,
 } from "./types";
@@ -75,6 +78,22 @@ export class SqliteStore implements TuntaStore {
 
   searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]> {
     return call("searchCardsFts", [query, limit]);
+  }
+
+  putEmbeddings(embeddings: StoredEmbedding[]): Promise<void> {
+    return call("putEmbeddings", [embeddings]);
+  }
+
+  searchEmbeddings(queryVector: number[], model: string, topK: number, ownerKind?: StoredEmbedding["ownerKind"]): Promise<EmbeddingHit[]> {
+    return call("searchEmbeddings", ownerKind === undefined ? [queryVector, model, topK] : [queryVector, model, topK, ownerKind]);
+  }
+
+  listEmbeddingModels(): Promise<EmbeddingModelInfo[]> {
+    return call("listEmbeddingModels", []);
+  }
+
+  deleteEmbeddings(ownerKind: StoredEmbedding["ownerKind"], ownerIds: string[]): Promise<void> {
+    return call("deleteEmbeddings", [ownerKind, ownerIds]);
   }
 
   putChatTurn(record: StoredChatTurn): Promise<StoredChatTurn> {

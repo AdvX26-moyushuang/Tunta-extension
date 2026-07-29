@@ -1,11 +1,18 @@
+import { l2Normalize } from "../text.js";
 import {
   CHAT_HISTORY_LIMIT,
+  embeddingKey,
+  rankEmbeddings,
   searchCardsByBm25,
+  summarizeEmbeddingModels,
   type CardFtsHit,
+  type EmbeddingHit,
+  type EmbeddingModelInfo,
   type StoredCapture,
   type StoredCard,
   type StoredChatTurn,
   type StoredDocument,
+  type StoredEmbedding,
   type StoredKaleidoscopeEdge,
   type TuntaStore,
 } from "./types.js";
@@ -25,6 +32,7 @@ export class MemoryStore implements TuntaStore {
   private cards = new Map<string, StoredCard>();
   private chatTurns = new Map<string, StoredChatTurn>();
   private kaleidoscopeEdges = new Map<string, StoredKaleidoscopeEdge>();
+  private embeddings = new Map<string, StoredEmbedding>();
 
   // captures
 
@@ -104,6 +112,33 @@ export class MemoryStore implements TuntaStore {
     return searchCardsByBm25([...this.cards.values()], query, limit);
   }
 
+  // embeddings
+
+  async putEmbeddings(embeddings: StoredEmbedding[]): Promise<void> {
+    for (const item of embeddings) {
+      // 与 SqlCore 对齐：存的就是归一化后的向量
+      this.embeddings.set(embeddingKey(item.ownerKind, item.ownerId, item.model), {
+        ...clone(item),
+        vector: [...l2Normalize(item.vector)],
+      });
+    }
+  }
+
+  async searchEmbeddings(queryVector: number[], model: string, topK: number, ownerKind?: StoredEmbedding["ownerKind"]): Promise<EmbeddingHit[]> {
+    return rankEmbeddings([...this.embeddings.values()], queryVector, model, topK, ownerKind);
+  }
+
+  async listEmbeddingModels(): Promise<EmbeddingModelInfo[]> {
+    return summarizeEmbeddingModels([...this.embeddings.values()]);
+  }
+
+  async deleteEmbeddings(ownerKind: StoredEmbedding["ownerKind"], ownerIds: string[]): Promise<void> {
+    const ids = new Set(ownerIds);
+    for (const [key, item] of this.embeddings) {
+      if (item.ownerKind === ownerKind && ids.has(item.ownerId)) this.embeddings.delete(key);
+    }
+  }
+
   // history
 
   async putChatTurn(record: StoredChatTurn): Promise<StoredChatTurn> {
@@ -155,5 +190,6 @@ export class MemoryStore implements TuntaStore {
     this.cards.clear();
     this.chatTurns.clear();
     this.kaleidoscopeEdges.clear();
+    this.embeddings.clear();
   }
 }

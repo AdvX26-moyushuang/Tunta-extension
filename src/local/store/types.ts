@@ -1,5 +1,5 @@
 import type { CaptureItem, CardType, ChatTurn } from "@/shared/api/contracts";
-import { bm25Rank, tokenize } from "../text.js";
+import { bm25Rank, dotProduct, l2Normalize, tokenize } from "../text.js";
 import type { ParserOutput } from "../parser";
 
 export interface StoredCapture extends CaptureItem {
@@ -52,6 +52,71 @@ export interface StoredKaleidoscopeEdge {
 
 export const CHAT_HISTORY_LIMIT = 100;
 
+// ---- embeddings（计划 §Task2.2） ----
+
+/**
+ * 向量的归属方：card = 卡片整体，chunk = 原文聚合块（Task2.3 接入）。
+ * RPC/JSON 边界用 number[]，SQL 层内部才转 Float32Array → BLOB。
+ */
+export interface StoredEmbedding {
+  ownerKind: "card" | "chunk";
+  ownerId: string;
+  model: string;
+  vector: number[];
+  createdAt: string;
+}
+
+export interface EmbeddingHit {
+  ownerKind: StoredEmbedding["ownerKind"];
+  ownerId: string;
+  score: number;
+}
+
+/** 换模型后用来查出旧向量提示重建，不静默丢弃。 */
+export interface EmbeddingModelInfo {
+  model: string;
+  dim: number;
+  count: number;
+}
+
+/**
+ * MemoryStore / IdbStore 的 searchEmbeddings 共用实现。
+ * 约定 stored 里的向量已在 putEmbeddings 时归一化，这里只归一化查询向量。
+ * 只比对 model 相同且维度匹配的向量，与 SqlCore 的 SQL 路径语义对齐。
+ */
+export function rankEmbeddings(
+  stored: StoredEmbedding[],
+  queryVector: number[],
+  model: string,
+  topK: number,
+  ownerKind?: StoredEmbedding["ownerKind"],
+): EmbeddingHit[] {
+  const query = l2Normalize(queryVector);
+  const hits: EmbeddingHit[] = [];
+  for (const item of stored) {
+    if (item.model !== model || item.vector.length !== queryVector.length) continue;
+    if (ownerKind !== undefined && item.ownerKind !== ownerKind) continue;
+    hits.push({ ownerKind: item.ownerKind, ownerId: item.ownerId, score: dotProduct(query, item.vector) });
+  }
+  return hits.sort((a, b) => b.score - a.score).slice(0, topK);
+}
+
+export function embeddingKey(ownerKind: string, ownerId: string, model: string): string {
+  return `${ownerKind}::${ownerId}::${model}`;
+}
+
+/** MemoryStore / IdbStore 的 listEmbeddingModels 共用实现：按 (model, dim) 分组盘点。 */
+export function summarizeEmbeddingModels(stored: StoredEmbedding[]): EmbeddingModelInfo[] {
+  const groups = new Map<string, EmbeddingModelInfo>();
+  for (const item of stored) {
+    const key = `${item.model}::${item.vector.length}`;
+    const info = groups.get(key) ?? { model: item.model, dim: item.vector.length, count: 0 };
+    info.count += 1;
+    groups.set(key, info);
+  }
+  return [...groups.values()].sort((a, b) => a.model.localeCompare(b.model) || a.dim - b.dim);
+}
+
 /** searchCardsFts 的命中项：分高者在前，score 恒为正（FTS5 的 bm25() 取反号）。 */
 export interface CardFtsHit {
   cardId: string;
@@ -101,6 +166,14 @@ export interface TuntaStore {
   listCardsBySource(sourceId: string): Promise<StoredCard[]>;
   /** FTS 检索（计划 §Task2.1）：SQL 实现走 FTS5 bm25，其余实现走等价 JS BM25。 */
   searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]>;
+
+  // embeddings（计划 §Task2.2）
+  /** 写入前统一 L2 归一化；同 (ownerKind, ownerId, model) 覆盖更新。 */
+  putEmbeddings(embeddings: StoredEmbedding[]): Promise<void>;
+  /** 向量检索下沉到 store：避免每次查询把全部向量搬过 RPC。只比对同 model 同维度。 */
+  searchEmbeddings(queryVector: number[], model: string, topK: number, ownerKind?: StoredEmbedding["ownerKind"]): Promise<EmbeddingHit[]>;
+  listEmbeddingModels(): Promise<EmbeddingModelInfo[]>;
+  deleteEmbeddings(ownerKind: StoredEmbedding["ownerKind"], ownerIds: string[]): Promise<void>;
 
   // chat history
   putChatTurn(record: StoredChatTurn): Promise<StoredChatTurn>;

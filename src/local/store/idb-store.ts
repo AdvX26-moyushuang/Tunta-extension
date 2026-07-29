@@ -1,18 +1,24 @@
 import { cardDedupeKey } from "../card-normalize";
+import { l2Normalize } from "../text";
 import {
   CHAT_HISTORY_LIMIT,
+  rankEmbeddings,
   searchCardsByBm25,
+  summarizeEmbeddingModels,
   type CardFtsHit,
+  type EmbeddingHit,
+  type EmbeddingModelInfo,
   type StoredCapture,
   type StoredCard,
   type StoredChatTurn,
   type StoredDocument,
+  type StoredEmbedding,
   type StoredKaleidoscopeEdge,
   type TuntaStore,
 } from "./types";
 
 const DB_NAME = "tunta-local";
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -39,6 +45,10 @@ function openDb(): Promise<IDBDatabase> {
         }
         if (!db.objectStoreNames.contains("kaleidoscope_edges")) {
           db.createObjectStore("kaleidoscope_edges", { keyPath: "edgeId" });
+        }
+        if (!db.objectStoreNames.contains("embeddings")) {
+          // 与 SQL 主键 (owner_kind, owner_id, model) 对齐
+          db.createObjectStore("embeddings", { keyPath: ["ownerKind", "ownerId", "model"] });
         }
         const cards = request.transaction?.objectStore("cards");
         if (cards) {
@@ -72,7 +82,7 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges";
+type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges" | "embeddings";
 
 async function withStore<T>(store: StoreName, mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const db = await openDb();
@@ -196,6 +206,46 @@ export class IdbStore implements TuntaStore {
     return searchCardsByBm25(await this.listCards(), query, limit);
   }
 
+  // embeddings（迁移前退路也要持久化：Task2.3 的 embed 去重不能在未迁移用户上失效）
+
+  async putEmbeddings(embeddings: StoredEmbedding[]): Promise<void> {
+    if (embeddings.length === 0) return;
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("embeddings", "readwrite");
+      const store = tx.objectStore("embeddings");
+      // 与 SqlCore 对齐：存的就是归一化后的向量
+      for (const item of embeddings) store.put({ ...item, vector: [...l2Normalize(item.vector)] });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("IDB embeddings bulk put failed"));
+    });
+  }
+
+  async searchEmbeddings(queryVector: number[], model: string, topK: number, ownerKind?: StoredEmbedding["ownerKind"]): Promise<EmbeddingHit[]> {
+    return rankEmbeddings(await getAll<StoredEmbedding>("embeddings"), queryVector, model, topK, ownerKind);
+  }
+
+  async listEmbeddingModels(): Promise<EmbeddingModelInfo[]> {
+    return summarizeEmbeddingModels(await getAll<StoredEmbedding>("embeddings"));
+  }
+
+  async deleteEmbeddings(ownerKind: StoredEmbedding["ownerKind"], ownerIds: string[]): Promise<void> {
+    if (ownerIds.length === 0) return;
+    const ids = new Set(ownerIds);
+    const related = (await getAll<StoredEmbedding>("embeddings")).filter(
+      (item) => item.ownerKind === ownerKind && ids.has(item.ownerId),
+    );
+    if (related.length === 0) return;
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("embeddings", "readwrite");
+      const store = tx.objectStore("embeddings");
+      for (const item of related) store.delete([item.ownerKind, item.ownerId, item.model]);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("IDB embeddings delete failed"));
+    });
+  }
+
   // history
 
   putChatTurn(record: StoredChatTurn): Promise<StoredChatTurn> {
@@ -271,12 +321,13 @@ export class IdbStore implements TuntaStore {
   async clearAllLocalData(): Promise<void> {
     const db = await openDb();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges"], "readwrite");
+      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges", "embeddings"], "readwrite");
       tx.objectStore("captures").clear();
       tx.objectStore("documents").clear();
       tx.objectStore("cards").clear();
       tx.objectStore("chat_history").clear();
       tx.objectStore("kaleidoscope_edges").clear();
+      tx.objectStore("embeddings").clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error ?? new Error("IDB clearAll failed"));
     });

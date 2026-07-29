@@ -63,16 +63,24 @@ export function bm25Rank(queryTokens: string[], docs: { id: string; tokens: stri
   return hits.sort((a, b) => b.score - a.score);
 }
 
-export function cosineSimilarity(a: number[], b: number[]): number {
+/**
+ * L2 归一化（计划 §Task2.2）：向量入库前统一归一化，
+ * 之后相似度就是纯点积，检索热路径不再开平方。零向量原样返回全零。
+ */
+export function l2Normalize(vector: ArrayLike<number>): Float32Array {
+  const out = new Float32Array(vector.length);
+  let sum = 0;
+  for (let i = 0; i < vector.length; i += 1) sum += vector[i] * vector[i];
+  if (sum === 0) return out;
+  const norm = Math.sqrt(sum);
+  for (let i = 0; i < vector.length; i += 1) out[i] = vector[i] / norm;
+  return out;
+}
+
+/** 两侧都已归一化时，点积 = 余弦相似度。长度不一致视为不可比，返回 0。 */
+export function dotProduct(a: ArrayLike<number>, b: ArrayLike<number>): number {
   if (a.length === 0 || a.length !== b.length) return 0;
   let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  for (let i = 0; i < a.length; i += 1) dot += a[i] * b[i];
+  return dot;
 }

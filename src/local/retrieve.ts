@@ -1,6 +1,6 @@
 import type { MatchedBy } from "@/shared/api/contracts";
 import type { CardFtsHit, StoredCard } from "./store/types";
-import { cosineSimilarity } from "./text";
+import { dotProduct, l2Normalize } from "./text";
 
 export interface ScoredCard {
   card: StoredCard;
@@ -20,14 +20,16 @@ export const FTS_CANDIDATES = 50;
 export function retrieveCards(cards: StoredCard[], ftsHits: CardFtsHit[], topK: number, queryEmbedding: number[] | null): ScoredCard[] {
   const cardById = new Map(cards.map((card) => [card.cardId, card]));
 
-  const vectorRanked =
-    queryEmbedding && queryEmbedding.length > 0
-      ? cards
-          .filter((card) => Array.isArray(card.embedding) && card.embedding.length === queryEmbedding.length)
-          .map((card) => ({ card, score: cosineSimilarity(queryEmbedding, card.embedding as number[]) }))
-          .filter((entry) => entry.score > 0.05)
-          .sort((a, b) => b.score - a.score)
-      : [];
+  // 两侧归一化后点积，数值等价旧 cosineSimilarity，0.05 阈值不变（计划 §Task2.2）。
+  // 这里仍读 card.embedding；pipeline 改写 embeddings 表是 Task2.3 的事。
+  const normalizedQuery = queryEmbedding && queryEmbedding.length > 0 ? l2Normalize(queryEmbedding) : null;
+  const vectorRanked = normalizedQuery
+    ? cards
+        .filter((card) => Array.isArray(card.embedding) && card.embedding.length === normalizedQuery.length)
+        .map((card) => ({ card, score: dotProduct(normalizedQuery, l2Normalize(card.embedding as number[])) }))
+        .filter((entry) => entry.score > 0.05)
+        .sort((a, b) => b.score - a.score)
+    : [];
 
   const merged = new Map<string, ScoredCard>();
   ftsHits.forEach((hit, rank) => {

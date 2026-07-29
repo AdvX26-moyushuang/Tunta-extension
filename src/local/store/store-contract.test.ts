@@ -8,6 +8,7 @@ import type {
   StoredCard,
   StoredChatTurn,
   StoredDocument,
+  StoredEmbedding,
   StoredKaleidoscopeEdge,
   TuntaStore,
 } from "./types.js";
@@ -135,6 +136,15 @@ function makeEdge(from: string, to: string): StoredKaleidoscopeEdge {
     relation: "相关",
     strength: 0.5,
     createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function makeEmbedding(overrides: Partial<StoredEmbedding> & { ownerId: string; vector: number[] }): StoredEmbedding {
+  return {
+    ownerKind: "card",
+    model: "test-model",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -304,13 +314,76 @@ for (const impl of implementations) {
     assert.equal((await store.searchCardsFts("深度学习", 10))[0]?.cardId, "card:new");
   });
 
-  test(`[${impl.name}] clearAllLocalData：五张表全部清空`, async () => {
+  test(`[${impl.name}] embeddings：归一化点积检索与 model/维度隔离`, async () => {
+    const store = impl.create();
+    await store.putEmbeddings([
+      // 故意存未归一化的向量：[3,4] 与 [0.6,0.8] 方向相同，归一化后得分应相同
+      makeEmbedding({ ownerId: "card:x", vector: [3, 4] }),
+      makeEmbedding({ ownerId: "card:y", vector: [4, 3] }),
+      makeEmbedding({ ownerId: "card:opposite", vector: [-3, -4] }),
+      makeEmbedding({ ownerId: "chunk:1", ownerKind: "chunk", vector: [3, 4] }),
+      // 其他模型/其他维度：不参与本 model 的检索
+      makeEmbedding({ ownerId: "card:other-model", model: "other", vector: [3, 4] }),
+      makeEmbedding({ ownerId: "card:other-dim", vector: [1, 0, 0] }),
+    ]);
+
+    const hits = await store.searchEmbeddings([0.6, 0.8], "test-model", 10);
+    assert.deepEqual(
+      hits.map((hit) => hit.ownerId),
+      ["card:x", "chunk:1", "card:y", "card:opposite"],
+    );
+    // 同向向量归一化后点积≈ 1，反向≈ -1
+    assert.ok(Math.abs(hits[0].score - 1) < 1e-6);
+    assert.ok(Math.abs(hits[3].score + 1) < 1e-6);
+
+    // ownerKind 过滤 + topK 截断
+    const cardsOnly = await store.searchEmbeddings([0.6, 0.8], "test-model", 2, "card");
+    assert.deepEqual(cardsOnly.map((hit) => hit.ownerId), ["card:x", "card:y"]);
+
+    // 同 (ownerKind, ownerId, model) 覆盖更新：方向反转后得分变≈ -1（不新增行）
+    await store.putEmbeddings([makeEmbedding({ ownerId: "card:x", vector: [-0.6, -0.8] })]);
+    const after = await store.searchEmbeddings([0.6, 0.8], "test-model", 10, "card");
+    assert.equal(after.length, 3);
+    assert.equal(after[0]?.ownerId, "card:y");
+    const overwritten = after.find((hit) => hit.ownerId === "card:x");
+    assert.ok(overwritten && Math.abs(overwritten.score + 1) < 1e-6);
+  });
+
+  test(`[${impl.name}] embeddings：listEmbeddingModels 盘点与 deleteEmbeddings 清理`, async () => {
+    const store = impl.create();
+    await store.putEmbeddings([
+      makeEmbedding({ ownerId: "card:1", vector: [1, 0] }),
+      makeEmbedding({ ownerId: "card:2", vector: [0, 1] }),
+      makeEmbedding({ ownerId: "chunk:1", ownerKind: "chunk", vector: [1, 1] }),
+      makeEmbedding({ ownerId: "card:legacy", model: "legacy-model", vector: [1, 0, 0] }),
+    ]);
+
+    // model/dim 显式存：换模型后能盘点出旧向量，不静默丢弃
+    assert.deepEqual(await store.listEmbeddingModels(), [
+      { model: "legacy-model", dim: 3, count: 1 },
+      { model: "test-model", dim: 2, count: 3 },
+    ]);
+
+    // 只删指定 ownerKind + ownerIds；同 id 的 chunk 不受影响
+    await store.deleteEmbeddings("card", ["card:1", "card:2"]);
+    assert.deepEqual(await store.listEmbeddingModels(), [
+      { model: "legacy-model", dim: 3, count: 1 },
+      { model: "test-model", dim: 2, count: 1 },
+    ]);
+    assert.equal((await store.searchEmbeddings([1, 1], "test-model", 10))[0]?.ownerId, "chunk:1");
+
+    await store.deleteEmbeddings("card", []);
+    assert.equal((await store.listEmbeddingModels()).length, 2);
+  });
+
+  test(`[${impl.name}] clearAllLocalData：六张表全部清空`, async () => {
     const store = impl.create();
     await store.putCapture(makeCapture({ captureId: "c1", url: "https://a.com" }));
     await store.putDocument(makeDocument("src-1"));
     await store.putCards([makeCard({ cardId: "card:1", sourceId: "src-1" })]);
     await store.putChatTurn(makeChatTurn("q1", "2026-01-01T00:00:00.000Z"));
     await store.putKaleidoscopeEdges([makeEdge("s1", "s2")]);
+    await store.putEmbeddings([makeEmbedding({ ownerId: "card:1", vector: [1, 0] })]);
 
     await store.clearAllLocalData();
     assert.equal((await store.listCaptures()).length, 0);
@@ -319,6 +392,7 @@ for (const impl of implementations) {
     assert.equal((await store.listChatTurns()).length, 0);
     assert.equal((await store.listKaleidoscopeEdges()).length, 0);
     assert.deepEqual(await store.searchCardsFts("标题", 10), []);
+    assert.deepEqual(await store.listEmbeddingModels(), []);
   });
 }
 
@@ -347,22 +421,48 @@ test("card_states：策展重跑（replaceCardsForSource）不影响用户状态
   assert.equal(Number(states[0].starred), 1);
 
   const versionRows = await driver.query("PRAGMA user_version");
-  assert.equal(Number(versionRows[0]?.user_version), 3);
+  assert.equal(Number(versionRows[0]?.user_version), 4);
 });
 
 // ---- cards_fts（计划 §Task2.1）：V2 → V3 升级时存量卡片回填索引 ----
 
 test("cards_fts：V2 库升级到 V3 时存量卡片可检索", async () => {
   const driver = createNodeDriver();
-  // 先把库建到 V3，再回退成「已有卡片的 V2 库」：删 fts 表 + 降 user_version
+  // 先把库建到最新版，再回退成「已有卡片的 V2 库」：删 V3/V4 的表 + 降 user_version
   const bootstrap = new SqlCore(driver);
   await bootstrap.putDocument(makeDocument("src-old"));
   await bootstrap.putCards([makeCard({ cardId: "card:legacy", sourceId: "src-old", title: "机器学习旧卡", body: "升级前就存在" })]);
   await driver.exec("DROP TABLE cards_fts");
+  await driver.exec("DROP TABLE embeddings");
   await driver.exec("PRAGMA user_version = 2");
 
-  // 重新初始化：migrateV3 建表并回填存量卡片
+  // 重新初始化：migrateV3 建表并回填存量卡片，V4 补齐 embeddings 表
   const upgraded = new SqlCore(driver);
   const hits = await upgraded.searchCardsFts("机器学习", 10);
   assert.equal(hits[0]?.cardId, "card:legacy");
+  assert.deepEqual(await upgraded.listEmbeddingModels(), []);
+});
+
+// ---- 向量检索性能（计划 §Task2.2 验收）：1000 条向量单次检索 <20ms ----
+
+test("embeddings：1000 条 768 维向量单次检索 <20ms", async () => {
+  const store = createNodeSqliteStore();
+  const dim = 768;
+  const batch: StoredEmbedding[] = [];
+  for (let i = 0; i < 1000; i += 1) {
+    const vector = new Array<number>(dim);
+    for (let j = 0; j < dim; j += 1) vector[j] = Math.sin(i * dim + j);
+    batch.push(makeEmbedding({ ownerId: `card:${i}`, vector }));
+  }
+  await store.putEmbeddings(batch);
+
+  const query = batch[500].vector;
+  const started = performance.now();
+  const hits = await store.searchEmbeddings(query, "test-model", 8);
+  const elapsed = performance.now() - started;
+
+  assert.equal(hits.length, 8);
+  assert.equal(hits[0].ownerId, "card:500");
+  assert.ok(Math.abs(hits[0].score - 1) < 1e-5);
+  assert.ok(elapsed < 20, `单次检索耗时 ${elapsed.toFixed(2)}ms，超过 20ms 验收线`);
 });

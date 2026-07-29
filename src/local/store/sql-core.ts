@@ -1,28 +1,31 @@
-import { tokenize } from "../text.js";
+import { l2Normalize, dotProduct, tokenize } from "../text.js";
 import {
   CHAT_HISTORY_LIMIT,
   cardFtsText,
   type CardFtsHit,
+  type EmbeddingHit,
+  type EmbeddingModelInfo,
   type StoredCapture,
   type StoredCard,
   type StoredChatTurn,
   type StoredDocument,
+  type StoredEmbedding,
   type StoredKaleidoscopeEdge,
   type TuntaStore,
 } from "./types.js";
 
 /**
  * SQL 层的最小驱动接口：wasm（offscreen worker）与 node:sqlite（契约测试）各自实现。
- * 全部 async，同步驱动包一层即可。
+ * 全部 async，同步驱动包一层即可。Uint8Array 对应 BLOB 列，两侧驱动都原生支持。
  */
-export type SqlValue = string | number | null;
+export type SqlValue = string | number | null | Uint8Array;
 
 export interface SqlDriver {
   exec(sql: string, params?: SqlValue[]): Promise<void>;
   query(sql: string, params?: SqlValue[]): Promise<Record<string, unknown>[]>;
 }
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** 计划 §Task1.3 的三张表 + TuntaStore 需要的 chat_history / kaleidoscope_edges。 */
 const SCHEMA_V1 = `
@@ -81,10 +84,28 @@ CREATE TABLE card_states (
 );
 `;
 
+/**
+ * 向量存储（计划 §Task2.2）。vector 是 L2 归一化后的 Float32Array 字节（BLOB），
+ * 相似度 = 纯点积。model/dim 显式存：换模型后能查出旧向量提示重建，不静默丢弃。
+ * 不引入 sqlite-vec：n<50k 时 JS 暴力扫描只要个位数 ms。
+ */
+const SCHEMA_V4 = `
+CREATE TABLE embeddings (
+  owner_kind TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dim INTEGER NOT NULL,
+  vector BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (owner_kind, owner_id, model)
+);
+`;
+
 const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)> = {
   1: SCHEMA_V1,
   2: SCHEMA_V2,
   3: migrateV3,
+  4: SCHEMA_V4,
 };
 
 /**
@@ -413,6 +434,68 @@ export class SqlCore implements TuntaStore {
     return rows.map((row) => ({ cardId: row.card_id as string, score: Number(row.score) }));
   }
 
+  // embeddings
+
+  /** BLOB 读回是 Uint8Array；字节偏移非 4 对齐时拷一份（Float32Array 视图要求对齐）。 */
+  private static blobToVector(value: unknown): Float32Array {
+    const bytes = value as Uint8Array;
+    if (bytes.byteOffset % 4 !== 0) {
+      return new Float32Array(bytes.slice().buffer);
+    }
+    return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  }
+
+  async putEmbeddings(embeddings: StoredEmbedding[]): Promise<void> {
+    if (embeddings.length === 0) return;
+    await this.inTransaction(async () => {
+      for (const item of embeddings) {
+        const normalized = l2Normalize(item.vector);
+        await this.driver.exec(
+          `INSERT INTO embeddings (owner_kind, owner_id, model, dim, vector, created_at) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(owner_kind, owner_id, model) DO UPDATE SET
+             dim = excluded.dim, vector = excluded.vector, created_at = excluded.created_at`,
+          [item.ownerKind, item.ownerId, item.model, normalized.length,
+           new Uint8Array(normalized.buffer), item.createdAt],
+        );
+      }
+    });
+  }
+
+  async searchEmbeddings(queryVector: number[], model: string, topK: number, ownerKind?: StoredEmbedding["ownerKind"]): Promise<EmbeddingHit[]> {
+    if (queryVector.length === 0) return [];
+    // 入库向量已归一化，只归一化查询向量；点积在 worker 内 JS 暴力扫，向量不过 RPC。
+    const query = l2Normalize(queryVector);
+    const rows = await this.rows(
+      `SELECT owner_kind, owner_id, vector FROM embeddings
+       WHERE model = ? AND dim = ?${ownerKind !== undefined ? " AND owner_kind = ?" : ""}`,
+      ownerKind !== undefined ? [model, query.length, ownerKind] : [model, query.length],
+    );
+    return rows
+      .map((row) => ({
+        ownerKind: row.owner_kind as StoredEmbedding["ownerKind"],
+        ownerId: row.owner_id as string,
+        score: dotProduct(query, SqlCore.blobToVector(row.vector)),
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK);
+  }
+
+  async listEmbeddingModels(): Promise<EmbeddingModelInfo[]> {
+    const rows = await this.rows(
+      "SELECT model, dim, COUNT(*) AS count FROM embeddings GROUP BY model, dim ORDER BY model, dim",
+    );
+    return rows.map((row) => ({ model: row.model as string, dim: Number(row.dim), count: Number(row.count) }));
+  }
+
+  async deleteEmbeddings(ownerKind: StoredEmbedding["ownerKind"], ownerIds: string[]): Promise<void> {
+    if (ownerIds.length === 0) return;
+    const placeholders = ownerIds.map(() => "?").join(", ");
+    await this.run(`DELETE FROM embeddings WHERE owner_kind = ? AND owner_id IN (${placeholders})`, [
+      ownerKind,
+      ...ownerIds,
+    ]);
+  }
+
   // chat history
 
   async putChatTurn(record: StoredChatTurn): Promise<StoredChatTurn> {
@@ -477,6 +560,7 @@ export class SqlCore implements TuntaStore {
   async clearAllLocalData(): Promise<void> {
     await this.inTransaction(async () => {
       await this.driver.exec("DELETE FROM cards_fts");
+      await this.driver.exec("DELETE FROM embeddings");
       await this.driver.exec("DELETE FROM cards");
       await this.driver.exec("DELETE FROM card_states");
       await this.driver.exec("DELETE FROM chat_history");
