@@ -150,7 +150,7 @@ export async function generateCardsForDocument(settings: LocalSettings, doc: Sto
     .slice(0, MAX_CARDS_PER_DOC)
     .map((item) => toValidCard(item, blocks, doc))
     .filter((card): card is CardWithoutId => card !== null);
-  const normalized = deduplicateCards(validCards, doc.sourceId);
+  const normalized = await deduplicateCards(validCards, doc.sourceId);
   const cards = normalized.cards;
   if (normalized.duplicateCount > 0) {
     console.warn(

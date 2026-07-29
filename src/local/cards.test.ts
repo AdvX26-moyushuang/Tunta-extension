@@ -15,8 +15,8 @@ function generated(title: string, body: string): CardWithoutId {
   };
 }
 
-test("drops repeated generated cards and keeps card ids contiguous", () => {
-  const result = deduplicateCards(
+test("drops repeated generated cards and derives stable content-based card ids", async () => {
+  const result = await deduplicateCards(
     [
       generated("同一张卡", "同一段卡片正文"),
       generated(" 同一张卡 ", "同一段卡片正文"),
@@ -27,19 +27,28 @@ test("drops repeated generated cards and keeps card ids contiguous", () => {
   );
 
   assert.equal(result.duplicateCount, 2);
-  assert.deepEqual(
-    result.cards.map((card) => ({ cardId: card.cardId, title: card.title, body: card.body })),
-    [
-      {
-        cardId: "card:web:example.com:dedupe:01",
-        title: "同一张卡",
-        body: "同一段卡片正文",
-      },
-      {
-        cardId: "card:web:example.com:dedupe:02",
-        title: "另一张卡",
-        body: "另一段卡片正文",
-      },
-    ],
+  assert.equal(result.cards.length, 2);
+  // ID 是内容派生的（计划 §Task1.6）：card:${sourceId}:${sha256 前 12 位}
+  for (const card of result.cards) {
+    assert.match(card.cardId, /^card:web:example\.com:dedupe:[0-9a-f]{12}$/);
+  }
+  assert.notEqual(result.cards[0].cardId, result.cards[1].cardId);
+});
+
+test("re-curation keeps card ids stable when content is unchanged", async () => {
+  // 计划验收：同一 source 连续两次策展，内容未变的卡片 cardId 不变——
+  // 即使 LLM 少产一张卡、换个顺序，ID 也不会错位到另一段知识上。
+  const first = await deduplicateCards(
+    [generated("卡 A", "正文 A"), generated("卡 B", "正文 B"), generated("卡 C", "正文 C")],
+    "web:example.com:dedupe",
   );
+  const second = await deduplicateCards(
+    [generated("卡 C", "正文 C"), generated("卡 A", "正文 A")], // 少了卡 B，顺序颠倒
+    "web:example.com:dedupe",
+  );
+
+  const firstIds = new Map(first.cards.map((card) => [card.title, card.cardId]));
+  for (const card of second.cards) {
+    assert.equal(card.cardId, firstIds.get(card.title));
+  }
 });

@@ -19,7 +19,7 @@ export interface SqlDriver {
   query(sql: string, params?: SqlValue[]): Promise<Record<string, unknown>[]>;
 }
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** 计划 §Task1.3 的三张表 + TuntaStore 需要的 chat_history / kaleidoscope_edges。 */
 const SCHEMA_V1 = `
@@ -61,17 +61,37 @@ CREATE INDEX idx_kedges_from ON kaleidoscope_edges(from_source_id);
 CREATE INDEX idx_kedges_to ON kaleidoscope_edges(to_source_id);
 `;
 
+/**
+ * 用户状态层（计划 §Task1.6，Phase 5 的前置）。
+ * 禁止外键级联（ON DELETE CASCADE）：card_states 不参与 replaceCardsForSource，
+ * 策展重跑不能抹掉用户笔记；孤儿行由手动触发的清理任务处理，不自动删。
+ */
+const SCHEMA_V2 = `
+CREATE TABLE card_states (
+  card_id TEXT PRIMARY KEY,
+  starred INTEGER DEFAULT 0,
+  hidden INTEGER DEFAULT 0,
+  user_note TEXT,
+  review_count INTEGER DEFAULT 0,
+  last_reviewed_at TEXT,
+  updated_at TEXT NOT NULL
+);
+`;
+
+const MIGRATIONS: Record<number, string> = { 1: SCHEMA_V1, 2: SCHEMA_V2 };
+
 async function initSchema(driver: SqlDriver): Promise<void> {
   const rows = await driver.query("PRAGMA user_version");
   const version = Number(rows[0]?.user_version ?? 0);
   if (version >= SCHEMA_VERSION) return;
-  if (version === 0) {
+  // 逐版本升级，每个版本一个事务；导入旧版本 .db 时也走这里补齐 schema。
+  for (let next = version + 1; next <= SCHEMA_VERSION; next += 1) {
     await driver.exec("BEGIN");
     try {
-      for (const statement of SCHEMA_V1.split(";").map((s) => s.trim()).filter(Boolean)) {
+      for (const statement of MIGRATIONS[next].split(";").map((s) => s.trim()).filter(Boolean)) {
         await driver.exec(statement);
       }
-      await driver.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      await driver.exec(`PRAGMA user_version = ${next}`);
       await driver.exec("COMMIT");
     } catch (cause) {
       await driver.exec("ROLLBACK").catch(() => undefined);
@@ -389,6 +409,7 @@ export class SqlCore implements TuntaStore {
   async clearAllLocalData(): Promise<void> {
     await this.inTransaction(async () => {
       await this.driver.exec("DELETE FROM cards");
+      await this.driver.exec("DELETE FROM card_states");
       await this.driver.exec("DELETE FROM chat_history");
       await this.driver.exec("DELETE FROM kaleidoscope_edges");
       await this.driver.exec("DELETE FROM documents");

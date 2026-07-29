@@ -13,10 +13,10 @@ import type {
 } from "./types.js";
 
 /** 用 node:sqlite 跑同一份 SQL（计划 §Task1.3 验收方式），生产路径是 sqlite-wasm + OPFS。 */
-function createNodeSqliteStore(): TuntaStore {
+function createNodeDriver(): SqlDriver {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
-  const driver: SqlDriver = {
+  return {
     async exec(sql, params = []) {
       if (params.length === 0) {
         db.exec(sql);
@@ -28,7 +28,10 @@ function createNodeSqliteStore(): TuntaStore {
       return db.prepare(sql).all(...params) as Record<string, unknown>[];
     },
   };
-  return new SqlCore(driver);
+}
+
+function createNodeSqliteStore(): TuntaStore {
+  return new SqlCore(createNodeDriver());
 }
 
 /**
@@ -266,3 +269,31 @@ for (const impl of implementations) {
     assert.equal((await store.listKaleidoscopeEdges()).length, 0);
   });
 }
+
+// ---- card_states（计划 §Task1.6）：SqlCore 专属，不在 TuntaStore 契约面内 ----
+
+test("card_states：策展重跑（replaceCardsForSource）不影响用户状态", async () => {
+  const driver = createNodeDriver();
+  const store = new SqlCore(driver);
+
+  await store.putDocument(makeDocument("src-1"));
+  await store.putCards([makeCard({ cardId: "card:a", sourceId: "src-1" })]);
+  // 用户给卡片写状态（Phase 5 的读写 API 尚未建，直接走 SQL）
+  await driver.exec(
+    "INSERT INTO card_states (card_id, starred, user_note, updated_at) VALUES (?, 1, ?, ?)",
+    ["card:a", "我的笔记", "2026-01-01T00:00:00.000Z"],
+  );
+
+  // 策展重跑：cards 全删重建，甚至换成另一批卡
+  await store.replaceCardsForSource("src-1", [makeCard({ cardId: "card:b", sourceId: "src-1" })]);
+
+  // card_states 不参与替换、无外键级联：孤儿行也必须原样保留
+  const states = await driver.query("SELECT * FROM card_states");
+  assert.equal(states.length, 1);
+  assert.equal(states[0].card_id, "card:a");
+  assert.equal(states[0].user_note, "我的笔记");
+  assert.equal(Number(states[0].starred), 1);
+
+  const versionRows = await driver.query("PRAGMA user_version");
+  assert.equal(Number(versionRows[0]?.user_version), 2);
+});
