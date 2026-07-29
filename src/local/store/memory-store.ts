@@ -1,5 +1,7 @@
 import {
   CHAT_HISTORY_LIMIT,
+  searchCardsByBm25,
+  type CardFtsHit,
   type StoredCapture,
   type StoredCard,
   type StoredChatTurn,
@@ -96,6 +98,10 @@ export class MemoryStore implements TuntaStore {
 
   async listCardsBySource(sourceId: string): Promise<StoredCard[]> {
     return [...this.cards.values()].filter((card) => card.sourceId === sourceId).map(clone);
+  }
+
+  async searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]> {
+    return searchCardsByBm25([...this.cards.values()], query, limit);
   }
 
   // history

@@ -1,6 +1,6 @@
 import type { MatchedBy } from "@/shared/api/contracts";
-import type { StoredCard } from "./store/types";
-import { cosineSimilarity, ftsScore, termFrequencies, tokenize } from "./text";
+import type { CardFtsHit, StoredCard } from "./store/types";
+import { cosineSimilarity } from "./text";
 
 export interface ScoredCard {
   card: StoredCard;
@@ -10,16 +10,15 @@ export interface ScoredCard {
 
 const RRF_K = 60;
 
-export function retrieveCards(cards: StoredCard[], query: string, topK: number, queryEmbedding: number[] | null): ScoredCard[] {
-  const queryTokens = tokenize(query);
+/** FTS 候选池大小：RRF 只吃前排名，50 条足够覆盖 topK ≤ 8 的合并窗口。 */
+export const FTS_CANDIDATES = 50;
 
-  const ftsRanked = cards
-    .map((card) => {
-      const tf = termFrequencies(tokenize(`${card.title}\n${card.body}\n${card.domainLabels.join(" ")}`));
-      return { card, score: ftsScore(queryTokens, tf) };
-    })
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score);
+/**
+ * RRF 合并两路召回。FTS 那路已下沉到 store（SQLite FTS5 bm25 / JS BM25 退路），
+ * 调用方用 store.searchCardsFts(query, FTS_CANDIDATES) 拿 ftsHits 传入。
+ */
+export function retrieveCards(cards: StoredCard[], ftsHits: CardFtsHit[], topK: number, queryEmbedding: number[] | null): ScoredCard[] {
+  const cardById = new Map(cards.map((card) => [card.cardId, card]));
 
   const vectorRanked =
     queryEmbedding && queryEmbedding.length > 0
@@ -31,11 +30,13 @@ export function retrieveCards(cards: StoredCard[], query: string, topK: number, 
       : [];
 
   const merged = new Map<string, ScoredCard>();
-  ftsRanked.forEach((entry, rank) => {
-    const existing = merged.get(entry.card.cardId) ?? { card: entry.card, score: 0, matchedBy: [] };
+  ftsHits.forEach((hit, rank) => {
+    const card = cardById.get(hit.cardId);
+    if (!card) return; // 防御：FTS 索引与卡片列表瞬时不一致
+    const existing = merged.get(card.cardId) ?? { card, score: 0, matchedBy: [] };
     existing.score += 1 / (RRF_K + rank + 1);
     if (!existing.matchedBy.includes("fts")) existing.matchedBy.push("fts");
-    merged.set(entry.card.cardId, existing);
+    merged.set(card.cardId, existing);
   });
   vectorRanked.forEach((entry, rank) => {
     const existing = merged.get(entry.card.cardId) ?? { card: entry.card, score: 0, matchedBy: [] };

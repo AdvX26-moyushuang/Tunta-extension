@@ -1,6 +1,8 @@
 import { cardDedupeKey } from "../card-normalize";
 import {
   CHAT_HISTORY_LIMIT,
+  searchCardsByBm25,
+  type CardFtsHit,
   type StoredCapture,
   type StoredCard,
   type StoredChatTurn,
@@ -187,6 +189,11 @@ export class IdbStore implements TuntaStore {
       request.onsuccess = () => resolve(request.result as StoredCard[]);
       request.onerror = () => reject(request.error ?? new Error("IDB cards by source failed"));
     });
+  }
+
+  /** 迁移完成前的退路：全量拉卡后跑 JS BM25，与 SqlCore 的 FTS5 路径语义对齐。 */
+  async searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]> {
+    return searchCardsByBm25(await this.listCards(), query, limit);
   }
 
   // history

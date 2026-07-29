@@ -1,4 +1,5 @@
 import type { CaptureItem, CardType, ChatTurn } from "@/shared/api/contracts";
+import { bm25Rank, tokenize } from "../text.js";
 import type { ParserOutput } from "../parser";
 
 export interface StoredCapture extends CaptureItem {
@@ -51,6 +52,26 @@ export interface StoredKaleidoscopeEdge {
 
 export const CHAT_HISTORY_LIMIT = 100;
 
+/** searchCardsFts 的命中项：分高者在前，score 恒为正（FTS5 的 bm25() 取反号）。 */
+export interface CardFtsHit {
+  cardId: string;
+  score: number;
+}
+
+/** 卡片进 FTS 索引的文本（计划 §Task2.1）：写入与查询两侧必须用同一个拼接。 */
+export function cardFtsText(card: Pick<StoredCard, "title" | "body" | "domainLabels">): string {
+  return `${card.title}\n${card.body}\n${card.domainLabels.join(" ")}`;
+}
+
+/** MemoryStore / IdbStore 的 searchCardsFts 共用实现：JS BM25，与 FTS5 路径语义对齐。 */
+export function searchCardsByBm25(cards: StoredCard[], query: string, limit: number): CardFtsHit[] {
+  const hits = bm25Rank(
+    tokenize(query),
+    cards.map((card) => ({ id: card.cardId, tokens: tokenize(cardFtsText(card)) })),
+  );
+  return hits.slice(0, limit).map((hit) => ({ cardId: hit.id, score: hit.score }));
+}
+
 /** 纯函数，不依赖存储实现，各实现共用。 */
 export function kaleidoscopeEdgeId(a: string, b: string): string {
   return `kedge:${[a, b].sort().join("::")}`;
@@ -78,6 +99,8 @@ export interface TuntaStore {
   putCard(card: StoredCard): Promise<StoredCard>;
   listCards(): Promise<StoredCard[]>;
   listCardsBySource(sourceId: string): Promise<StoredCard[]>;
+  /** FTS 检索（计划 §Task2.1）：SQL 实现走 FTS5 bm25，其余实现走等价 JS BM25。 */
+  searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]>;
 
   // chat history
   putChatTurn(record: StoredChatTurn): Promise<StoredChatTurn>;

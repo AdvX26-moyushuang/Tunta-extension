@@ -19,22 +19,48 @@ export function tokenize(text: string): string[] {
 }
 
 
-export function termFrequencies(tokens: string[]): Map<string, number> {
+function termFrequencies(tokens: string[]): Map<string, number> {
   const tf = new Map<string, number>();
   for (const token of tokens) tf.set(token, (tf.get(token) ?? 0) + 1);
   return tf;
 }
 
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
 
-export function ftsScore(queryTokens: string[], docTf: Map<string, number>): number {
+export interface Bm25Hit {
+  id: string;
+  score: number;
+}
+
+/**
+ * 标准 BM25（词间 OR 语义），与 SQLite FTS5 的 bm25() 同族。
+ * MemoryStore / IdbStore 的 searchCardsFts 退路实现，也是 FTS5 行为的测试基准。
+ */
+export function bm25Rank(queryTokens: string[], docs: { id: string; tokens: string[] }[]): Bm25Hit[] {
   const unique = [...new Set(queryTokens)];
-  if (unique.length === 0) return 0;
-  let score = 0;
+  if (unique.length === 0 || docs.length === 0) return [];
+  const docCount = docs.length;
+  const avgLen = docs.reduce((sum, doc) => sum + doc.tokens.length, 0) / docCount || 1;
+  const tfs = docs.map((doc) => termFrequencies(doc.tokens));
+  const dfs = new Map<string, number>();
   for (const term of unique) {
-    const tf = docTf.get(term);
-    if (tf) score += 1 + Math.log(tf);
+    dfs.set(term, tfs.reduce((n, tf) => n + (tf.has(term) ? 1 : 0), 0));
   }
-  return score / unique.length;
+  const hits: Bm25Hit[] = [];
+  docs.forEach((doc, index) => {
+    const tf = tfs[index];
+    let score = 0;
+    for (const term of unique) {
+      const freq = tf.get(term);
+      if (!freq) continue;
+      const df = dfs.get(term) as number;
+      const idf = Math.log(1 + (docCount - df + 0.5) / (df + 0.5));
+      score += (idf * freq * (BM25_K1 + 1)) / (freq + BM25_K1 * (1 - BM25_B + (BM25_B * doc.tokens.length) / avgLen));
+    }
+    if (score > 0) hits.push({ id: doc.id, score });
+  });
+  return hits.sort((a, b) => b.score - a.score);
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {

@@ -41,7 +41,7 @@ import {
   type ParserProblem,
 } from "./parser";
 import { callEmbedding } from "./provider";
-import { retrieveCards } from "./retrieve";
+import { FTS_CANDIDATES, retrieveCards } from "./retrieve";
 import { chooseReviewCandidate, createSingleFlight } from "./review";
 import { ensureOriginPermission, isChatConfigured, isEmbeddingConfigured, loadSettings } from "./settings";
 
@@ -328,7 +328,11 @@ export function createLocalApi(): TuntaApi {
 
     retrieve: async (query, topK = 8): Promise<RetrieveResponse> => {
       const started = Date.now();
-      const [cards, settings] = await Promise.all([getStore().listCards(), loadSettings()]);
+      const [cards, ftsHits, settings] = await Promise.all([
+        getStore().listCards(),
+        getStore().searchCardsFts(query, FTS_CANDIDATES),
+        loadSettings(),
+      ]);
       let queryEmbedding: number[] | null = null;
       if (isEmbeddingConfigured(settings)) {
         try {
@@ -337,7 +341,7 @@ export function createLocalApi(): TuntaApi {
           console.warn("[tunta] 查询向量化失败，退化为纯 FTS:", cause);
         }
       }
-      const hits = retrieveCards(cards, query, topK, queryEmbedding);
+      const hits = retrieveCards(cards, ftsHits, topK, queryEmbedding);
       const documents = new Map((await getStore().listDocuments()).map((doc) => [doc.sourceId, doc]));
       return {
         hits: hits.map((hit) => {
@@ -367,7 +371,7 @@ export function createLocalApi(): TuntaApi {
       if (!isChatConfigured(settings)) {
         throw new ApiError("尚未配置 provider：请在工作台「设置」页填写 API key 后再提问。", 400, "PROVIDER_NOT_CONFIGURED");
       }
-      const cards = await getStore().listCards();
+      const [cards, ftsHits] = await Promise.all([getStore().listCards(), getStore().searchCardsFts(query, FTS_CANDIDATES)]);
       let queryEmbedding: number[] | null = null;
       if (isEmbeddingConfigured(settings)) {
         try {
@@ -376,7 +380,7 @@ export function createLocalApi(): TuntaApi {
           console.warn("[tunta] 查询向量化失败，退化为纯 FTS:", cause);
         }
       }
-      let hits = retrieveCards(cards, query, 6, queryEmbedding);
+      let hits = retrieveCards(cards, ftsHits, 6, queryEmbedding);
       
       if (cards.length > 0 && (OPEN_QUERY_PATTERN.test(query) || hits.length < 2)) {
         const curated = await selectCardsForOpenQuery(settings, cards, query);

@@ -1,5 +1,8 @@
+import { tokenize } from "../text.js";
 import {
   CHAT_HISTORY_LIMIT,
+  cardFtsText,
+  type CardFtsHit,
   type StoredCapture,
   type StoredCard,
   type StoredChatTurn,
@@ -19,7 +22,7 @@ export interface SqlDriver {
   query(sql: string, params?: SqlValue[]): Promise<Record<string, unknown>[]>;
 }
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** 计划 §Task1.3 的三张表 + TuntaStore 需要的 chat_history / kaleidoscope_edges。 */
 const SCHEMA_V1 = `
@@ -78,7 +81,36 @@ CREATE TABLE card_states (
 );
 `;
 
-const MIGRATIONS: Record<number, string> = { 1: SCHEMA_V1, 2: SCHEMA_V2 };
+const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)> = {
+  1: SCHEMA_V1,
+  2: SCHEMA_V2,
+  3: migrateV3,
+};
+
+/**
+ * FTS5 全文索引（计划 §Task2.1）。内置 tokenizer 不切中文，
+ * fts_text 存的是 JS 侧 tokenize() 预分词后空格连接的文本，禁止写入原始中文。
+ * contentless（content=''）+ rowid 对齐 cards.rowid。注意：cards 没有 INTEGER PK，
+ * VACUUM 会重编 rowid——如果将来引入 VACUUM，必须同时重建 cards_fts。
+ */
+async function migrateV3(driver: SqlDriver): Promise<void> {
+  await driver.exec(
+    "CREATE VIRTUAL TABLE cards_fts USING fts5(fts_text, content='', contentless_delete=1, tokenize='unicode61')",
+  );
+  // 存量卡片回填（需要 JS 分词，所以这一版不是纯 SQL）
+  const rows = await driver.query("SELECT rowid, title, body, domain_labels FROM cards");
+  for (const row of rows) {
+    const card = {
+      title: (row.title as string | null) ?? "",
+      body: (row.body as string | null) ?? "",
+      domainLabels: typeof row.domain_labels === "string" ? (JSON.parse(row.domain_labels) as string[]) : [],
+    };
+    await driver.exec("INSERT INTO cards_fts (rowid, fts_text) VALUES (?, ?)", [
+      Number(row.rowid),
+      tokenize(cardFtsText(card)).join(" "),
+    ]);
+  }
+}
 
 async function initSchema(driver: SqlDriver): Promise<void> {
   const rows = await driver.query("PRAGMA user_version");
@@ -88,8 +120,13 @@ async function initSchema(driver: SqlDriver): Promise<void> {
   for (let next = version + 1; next <= SCHEMA_VERSION; next += 1) {
     await driver.exec("BEGIN");
     try {
-      for (const statement of MIGRATIONS[next].split(";").map((s) => s.trim()).filter(Boolean)) {
-        await driver.exec(statement);
+      const migration = MIGRATIONS[next];
+      if (typeof migration === "function") {
+        await migration(driver);
+      } else {
+        for (const statement of migration.split(";").map((s) => s.trim()).filter(Boolean)) {
+          await driver.exec(statement);
+        }
       }
       await driver.exec(`PRAGMA user_version = ${next}`);
       await driver.exec("COMMIT");
@@ -315,10 +352,22 @@ export class SqlCore implements TuntaStore {
 
   // cards
 
+  /** 写入/更新单张卡同时维护 FTS 行（rowid 对齐 cards.rowid），只在事务内调用。 */
+  private async upsertCardWithFts(card: StoredCard): Promise<void> {
+    await this.driver.exec(CARD_UPSERT, cardParams(card));
+    const rows = await this.driver.query("SELECT rowid FROM cards WHERE card_id = ?", [card.cardId]);
+    const rowid = Number(rows[0]?.rowid);
+    await this.driver.exec("DELETE FROM cards_fts WHERE rowid = ?", [rowid]);
+    await this.driver.exec("INSERT INTO cards_fts (rowid, fts_text) VALUES (?, ?)", [
+      rowid,
+      tokenize(cardFtsText(card)).join(" "),
+    ]);
+  }
+
   async putCards(cards: StoredCard[]): Promise<void> {
     if (cards.length === 0) return;
     await this.inTransaction(async () => {
-      for (const card of cards) await this.driver.exec(CARD_UPSERT, cardParams(card));
+      for (const card of cards) await this.upsertCardWithFts(card);
     });
   }
 
@@ -327,13 +376,17 @@ export class SqlCore implements TuntaStore {
       throw new Error(`replaceCardsForSource 收到跨 source 卡片：${sourceId}`);
     }
     await this.inTransaction(async () => {
+      // 先清 FTS 再删卡：rowid 子查询依赖 cards 行还在
+      await this.driver.exec("DELETE FROM cards_fts WHERE rowid IN (SELECT rowid FROM cards WHERE source_id = ?)", [sourceId]);
       await this.driver.exec("DELETE FROM cards WHERE source_id = ?", [sourceId]);
-      for (const card of cards) await this.driver.exec(CARD_UPSERT, cardParams(card));
+      for (const card of cards) await this.upsertCardWithFts(card);
     });
   }
 
   async putCard(card: StoredCard): Promise<StoredCard> {
-    await this.run(CARD_UPSERT, cardParams(card));
+    await this.inTransaction(async () => {
+      await this.upsertCardWithFts(card);
+    });
     return card;
   }
 
@@ -343,6 +396,21 @@ export class SqlCore implements TuntaStore {
 
   async listCardsBySource(sourceId: string): Promise<StoredCard[]> {
     return (await this.rows("SELECT * FROM cards WHERE source_id = ?", [sourceId])).map(rowToCard);
+  }
+
+  async searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]> {
+    const tokens = tokenize(query);
+    if (tokens.length === 0) return [];
+    // OR 连接：MATCH 的隐式空格是 AND，长 query 的跨词 bigram 会把结果集清零；
+    // 召回语义对齐旧 ftsScore（命中任一词即入选），排序交给 bm25。
+    const match = [...new Set(tokens)].map((token) => `"${token}"`).join(" OR ");
+    const rows = await this.rows(
+      `SELECT c.card_id, -bm25(cards_fts) AS score
+       FROM cards_fts JOIN cards c ON c.rowid = cards_fts.rowid
+       WHERE cards_fts MATCH ? ORDER BY bm25(cards_fts) LIMIT ?`,
+      [match, limit],
+    );
+    return rows.map((row) => ({ cardId: row.card_id as string, score: Number(row.score) }));
   }
 
   // chat history
@@ -408,6 +476,7 @@ export class SqlCore implements TuntaStore {
 
   async clearAllLocalData(): Promise<void> {
     await this.inTransaction(async () => {
+      await this.driver.exec("DELETE FROM cards_fts");
       await this.driver.exec("DELETE FROM cards");
       await this.driver.exec("DELETE FROM card_states");
       await this.driver.exec("DELETE FROM chat_history");

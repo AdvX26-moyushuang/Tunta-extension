@@ -253,6 +253,57 @@ for (const impl of implementations) {
     assert.equal((await store.listKaleidoscopeEdges()).length, 0);
   });
 
+  test(`[${impl.name}] searchCardsFts：中文 query 命中与打分单调`, async () => {
+    const store = impl.create();
+    await store.putDocument(makeDocument("src-f"));
+    await store.putCards([
+      makeCard({
+        cardId: "card:ml-dense",
+        sourceId: "src-f",
+        title: "机器学习入门",
+        body: "机器学习是人工智能的分支，机器学习模型需要大量数据训练",
+      }),
+      makeCard({
+        cardId: "card:ml-sparse",
+        sourceId: "src-f",
+        title: "工具清单",
+        body: "这份清单里只顺带提到了一次机器学习而已，其余都是无关内容",
+      }),
+      makeCard({ cardId: "card:cook", sourceId: "src-f", title: "红烧肉做法", body: "先焯水再炖煮收汁" }),
+    ]);
+
+    const hits = await store.searchCardsFts("机器学习", 10);
+    // 无关卡不入选；命中多的卡排在命中少的前面（打分单调）
+    assert.deepEqual(hits.map((hit) => hit.cardId), ["card:ml-dense", "card:ml-sparse"]);
+    assert.ok(hits[0].score > hits[1].score);
+    assert.ok(hits.every((hit) => hit.score > 0));
+
+    // 英文 query 大小写不敏感（tokenize 统一小写）
+    await store.putCard(makeCard({ cardId: "card:en", sourceId: "src-f", title: "SQLite WASM", body: "OPFS notes" }));
+    assert.equal((await store.searchCardsFts("sqlite", 10))[0]?.cardId, "card:en");
+
+    // 无关 query 不命中；limit 生效
+    assert.deepEqual(await store.searchCardsFts("量子物理", 10), []);
+    assert.equal((await store.searchCardsFts("机器学习", 1)).length, 1);
+  });
+
+  test(`[${impl.name}] searchCardsFts：索引跟随策展替换与卡片更新`, async () => {
+    const store = impl.create();
+    await store.putDocument(makeDocument("src-g"));
+    await store.putCards([makeCard({ cardId: "card:old", sourceId: "src-g", title: "机器学习笔记", body: "旧内容" })]);
+    assert.equal((await store.searchCardsFts("机器学习", 10))[0]?.cardId, "card:old");
+
+    // 策展重跑换卡：旧卡退出索引，新卡可检索
+    await store.replaceCardsForSource("src-g", [makeCard({ cardId: "card:new", sourceId: "src-g", title: "红烧肉入门", body: "焯水炖煮" })]);
+    assert.deepEqual(await store.searchCardsFts("机器学习", 10), []);
+    assert.equal((await store.searchCardsFts("红烧肉", 10))[0]?.cardId, "card:new");
+
+    // putCard 覆盖更新：索引同步新文本
+    await store.putCard(makeCard({ cardId: "card:new", sourceId: "src-g", title: "深度学习进阶", body: "神经网络" }));
+    assert.deepEqual(await store.searchCardsFts("红烧肉", 10), []);
+    assert.equal((await store.searchCardsFts("深度学习", 10))[0]?.cardId, "card:new");
+  });
+
   test(`[${impl.name}] clearAllLocalData：五张表全部清空`, async () => {
     const store = impl.create();
     await store.putCapture(makeCapture({ captureId: "c1", url: "https://a.com" }));
@@ -267,6 +318,7 @@ for (const impl of implementations) {
     assert.equal((await store.listCards()).length, 0);
     assert.equal((await store.listChatTurns()).length, 0);
     assert.equal((await store.listKaleidoscopeEdges()).length, 0);
+    assert.deepEqual(await store.searchCardsFts("标题", 10), []);
   });
 }
 
@@ -295,5 +347,22 @@ test("card_states：策展重跑（replaceCardsForSource）不影响用户状态
   assert.equal(Number(states[0].starred), 1);
 
   const versionRows = await driver.query("PRAGMA user_version");
-  assert.equal(Number(versionRows[0]?.user_version), 2);
+  assert.equal(Number(versionRows[0]?.user_version), 3);
+});
+
+// ---- cards_fts（计划 §Task2.1）：V2 → V3 升级时存量卡片回填索引 ----
+
+test("cards_fts：V2 库升级到 V3 时存量卡片可检索", async () => {
+  const driver = createNodeDriver();
+  // 先把库建到 V3，再回退成「已有卡片的 V2 库」：删 fts 表 + 降 user_version
+  const bootstrap = new SqlCore(driver);
+  await bootstrap.putDocument(makeDocument("src-old"));
+  await bootstrap.putCards([makeCard({ cardId: "card:legacy", sourceId: "src-old", title: "机器学习旧卡", body: "升级前就存在" })]);
+  await driver.exec("DROP TABLE cards_fts");
+  await driver.exec("PRAGMA user_version = 2");
+
+  // 重新初始化：migrateV3 建表并回填存量卡片
+  const upgraded = new SqlCore(driver);
+  const hits = await upgraded.searchCardsFts("机器学习", 10);
+  assert.equal(hits[0]?.cardId, "card:legacy");
 });

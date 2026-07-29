@@ -1,6 +1,7 @@
 import { ensureOffscreen } from "@/offscreen/host";
 import { DB_RPC_TARGET, type DbMethod, type DbRpcResponse } from "@/shared/db-rpc";
 import type {
+  CardFtsHit,
   StoredCapture,
   StoredCard,
   StoredChatTurn,
@@ -70,6 +71,10 @@ export class SqliteStore implements TuntaStore {
 
   listCardsBySource(sourceId: string): Promise<StoredCard[]> {
     return call("listCardsBySource", [sourceId]);
+  }
+
+  searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]> {
+    return call("searchCardsFts", [query, limit]);
   }
 
   putChatTurn(record: StoredChatTurn): Promise<StoredChatTurn> {
