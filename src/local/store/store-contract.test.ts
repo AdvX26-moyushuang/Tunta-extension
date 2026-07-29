@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { MemoryStore } from "./memory-store.js";
+import { SqlCore, type SqlDriver } from "./sql-core.js";
 import type {
   StoredCapture,
   StoredCard,
@@ -10,12 +12,32 @@ import type {
   TuntaStore,
 } from "./types.js";
 
+/** 用 node:sqlite 跑同一份 SQL（计划 §Task1.3 验收方式），生产路径是 sqlite-wasm + OPFS。 */
+function createNodeSqliteStore(): TuntaStore {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  const driver: SqlDriver = {
+    async exec(sql, params = []) {
+      if (params.length === 0) {
+        db.exec(sql);
+        return;
+      }
+      db.prepare(sql).run(...params);
+    },
+    async query(sql, params = []) {
+      return db.prepare(sql).all(...params) as Record<string, unknown>[];
+    },
+  };
+  return new SqlCore(driver);
+}
+
 /**
  * TuntaStore 契约测试：跑在任意实现上。
- * IdbStore 在 Node 里没有 indexedDB，跳过；SqliteStore（Phase 1）接入后加进列表。
+ * IdbStore 在 Node 里没有 indexedDB，跳过；SqliteStore 的 SQL 主体（SqlCore）用 node:sqlite 验证。
  */
 const implementations: { name: string; create: () => TuntaStore }[] = [
   { name: "MemoryStore", create: () => new MemoryStore() },
+  { name: "SqlCore(node:sqlite)", create: createNodeSqliteStore },
 ];
 
 function makeCapture(overrides: Partial<StoredCapture> & { captureId: string; url: string }): StoredCapture {
@@ -148,6 +170,9 @@ for (const impl of implementations) {
 
   test(`[${impl.name}] cards：putCards / listCardsBySource / putCard`, async () => {
     const store = impl.create();
+    // SQL schema 里 cards.source_id 外键指向 documents，与真实业务一致：先写文档再写卡片
+    await store.putDocument(makeDocument("src-a"));
+    await store.putDocument(makeDocument("src-b"));
     await store.putCards([
       makeCard({ cardId: "card:a:1", sourceId: "src-a" }),
       makeCard({ cardId: "card:a:2", sourceId: "src-a" }),
@@ -165,6 +190,8 @@ for (const impl of implementations) {
 
   test(`[${impl.name}] replaceCardsForSource：只替换本 source，跨 source 报错`, async () => {
     const store = impl.create();
+    await store.putDocument(makeDocument("src-a"));
+    await store.putDocument(makeDocument("src-b"));
     await store.putCards([
       makeCard({ cardId: "card:a:1", sourceId: "src-a" }),
       makeCard({ cardId: "card:a:2", sourceId: "src-a" }),
