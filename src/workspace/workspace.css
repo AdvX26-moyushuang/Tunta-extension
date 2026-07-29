@@ -925,6 +925,14 @@ body {
   font-size: var(--text-xs);
 }
 
+/* chunk 命中的证据层级标签：原文片段（未经提炼） */
+.citation-kind {
+  padding: 2px 8px;
+  border: 1px solid rgba(119, 85, 55, 0.3);
+  border-radius: var(--r-pill);
+  color: var(--muted);
+}
+
 .citation-source a {
   color: var(--brand-water-deep);
   font-weight: 700;

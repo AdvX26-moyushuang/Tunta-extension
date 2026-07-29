@@ -4,6 +4,15 @@ import type { ChatCitation, ChatHistoryEntry, ChatTurn } from "@/shared/api/cont
 import { formatTime, locatorText } from "@/shared/format";
 import { openExternal } from "@/shared/browser";
 
+/** chunk 命中只通过 citations（source_kind: "chunk"）到达 UI；存量历史 turn 缺 source_kind 时视为 card。 */
+function chunkCitations(turn: ChatTurn): ChatCitation[] {
+  return turn.citations.filter((citation) => citation.source_kind === "chunk");
+}
+
+function countChunkCitations(turn: ChatTurn): number {
+  return chunkCitations(turn).length;
+}
+
 interface SearchPageProps {
   onToast: (message: string) => void;
 }
@@ -122,7 +131,7 @@ export function SearchPage({ onToast }: SearchPageProps) {
             {busy
               ? "检索与生成中…"
               : turn
-                ? `${turn.retrieved_cards.length} 张命中卡片 · ${turn.generation.latency_ms}ms · ${turn.generation.model}`
+                ? `${turn.retrieved_cards.length} 张命中卡片${countChunkCitations(turn) > 0 ? ` · ${countChunkCitations(turn)} 段原文片段` : ""} · ${turn.generation.latency_ms}ms · ${turn.generation.model}`
                 : "等待查询"}
           </span>
           <button type="button" className="history-toggle" onClick={() => setHistoryOpen(true)}>
@@ -149,7 +158,7 @@ export function SearchPage({ onToast }: SearchPageProps) {
                 className={`mode-tab ${mode === "results" ? "active" : ""}`}
                 onClick={() => setMode("results")}
               >
-                命中卡片（{turn.retrieved_cards.length}）
+                命中材料（{turn.retrieved_cards.length + countChunkCitations(turn)}）
               </button>
             </div>
 
@@ -297,6 +306,7 @@ function AnswerView({
               <div>
                 {citation.quote && <div className="citation-quote">「{citation.quote}」</div>}
                 <div className="citation-source">
+                  {citation.source_kind === "chunk" && <span className="citation-kind">原文片段（未经提炼）</span>}
                   <span>{citation.source_id}</span>
                   <span>
                     {citation.block_id} · {locatorText(citation.locator)}
@@ -370,13 +380,14 @@ function ResultsView({ turn }: { turn: ChatTurn }) {
   const citationByCard = useMemo(() => {
     const map = new Map<string, ChatCitation>();
     turn.citations.forEach((citation) => {
-      // chunk 命中的 citation 没有 card_id（展示适配在 Task2.3c）
+      // chunk 命中的 citation 没有 card_id，下面单独渲染成原文片段行
       if (citation.card_id) map.set(citation.card_id, citation);
     });
     return map;
   }, [turn.citations]);
+  const chunkRows = chunkCitations(turn);
 
-  if (turn.retrieved_cards.length === 0) {
+  if (turn.retrieved_cards.length === 0 && chunkRows.length === 0) {
     return (
       <div className="empty-state" style={{ maxWidth: 860 }}>
         <div>
@@ -415,6 +426,26 @@ function ResultsView({ turn }: { turn: ChatTurn }) {
           </button>
         );
       })}
+      {chunkRows.map((citation, index) => (
+        <button
+          key={`chunk-${citation.marker}`}
+          type="button"
+          className="result-row"
+          onClick={() => {
+            if (citation.original_url) void openExternal(citation.original_url);
+          }}
+        >
+          <span className="result-rank">{turn.retrieved_cards.length + index + 1}</span>
+          <span>
+            <span className="result-title">原文片段（未经提炼）</span>
+            <span className="result-snippet">{citation.quote ?? ""}</span>
+            <span className="result-source">
+              {citation.source_id} · {citation.block_id} · {locatorText(citation.locator)}
+            </span>
+          </span>
+          <span className="signal">向量</span>
+        </button>
+      ))}
     </div>
   );
 }
