@@ -6,7 +6,7 @@
  * - API key 只存本机（chrome.storage.local）；保存时按 origin 申请 host permission
  * - 「测试连接」做最小开销的真实调用，失败原因直接展示（Fail fast）
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getApi } from "@/shared/api";
 import {
   DEFAULT_SETTINGS,
@@ -16,6 +16,8 @@ import {
   type LocalSettings,
 } from "@/local/settings";
 import { testChatConnection, testEmbeddingConnection } from "@/local/provider";
+import { exportDbBytes, importDbBytes } from "@/local/store/db-admin";
+import { isMigrated } from "@/local/store/migrate";
 
 type TestState = { status: "idle" | "testing" | "ok" | "fail"; message: string };
 
@@ -27,9 +29,15 @@ export function SettingsPage({ onToast, onSaved }: { onToast: (message: string) 
   const [clearing, setClearing] = useState(false);
   const [chatTest, setChatTest] = useState<TestState>(IDLE_TEST);
   const [embeddingTest, setEmbeddingTest] = useState<TestState>(IDLE_TEST);
+  // 导出/导入只在数据已迁移到 SQLite 后可用（迁移前数据还在 IndexedDB）
+  const [sqliteReady, setSqliteReady] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     void loadSettings().then(setSettings);
+    void isMigrated().then(setSqliteReady);
   }, []);
 
   const updateChat = useCallback((patch: Partial<LocalSettings["chat"]>) => {
@@ -100,6 +108,47 @@ export function SettingsPage({ onToast, onSaved }: { onToast: (message: string) 
       setClearing(false);
     }
   }, [onSaved, onToast]);
+
+  const exportLibrary = useCallback(async () => {
+    setExporting(true);
+    try {
+      const bytes = await exportDbBytes();
+      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: "application/vnd.sqlite3" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `tunta-${new Date().toISOString().slice(0, 10)}.db`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      onToast("知识库已导出。");
+    } catch (cause) {
+      onToast(`导出失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      setExporting(false);
+    }
+  }, [onToast]);
+
+  const importLibrary = useCallback(
+    async (file: File) => {
+      // 二次确认：导入是覆盖恢复，当前 SQLite 库会被替换（IndexedDB 不受影响）
+      const confirmed = window.confirm(
+        `确定用「${file.name}」覆盖当前知识库？\n\n当前库会被替换，不可恢复。建议先导出一份备份。`,
+      );
+      if (!confirmed) return;
+      setImporting(true);
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        await importDbBytes(bytes);
+        onSaved(); // 刷新顶栏状态 chips（卡片数变化）
+        onToast("知识库已从备份恢复。");
+      } catch (cause) {
+        onToast(`导入失败：${cause instanceof Error ? cause.message : String(cause)}`);
+      } finally {
+        setImporting(false);
+      }
+    },
+    [onSaved, onToast],
+  );
 
   if (!settings) {
     return (
@@ -215,9 +264,41 @@ export function SettingsPage({ onToast, onSaved }: { onToast: (message: string) 
           <section className="settings-section">
             <h2>本机数据</h2>
             <p className="settings-hint">
-              收藏记录、原文快照、卡片与问答历史都保存在浏览器 IndexedDB。清空后不可恢复；
+              收藏记录、原文快照、卡片与问答历史都保存在本机。清空后不可恢复；
               provider 设置与 API key 保留。
             </p>
+            <div className="settings-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void exportLibrary()}
+                disabled={!sqliteReady || exporting}
+              >
+                {exporting ? "导出中…" : "导出知识库 (.db)"}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => importInputRef.current?.click()}
+                disabled={!sqliteReady || importing}
+              >
+                {importing ? "导入中…" : "导入知识库"}
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".db"
+                style={{ display: "none" }}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = ""; // 允许重复选同一文件
+                  if (file) void importLibrary(file);
+                }}
+              />
+            </div>
+            {!sqliteReady && (
+              <p className="settings-hint">导出/导入将在数据迁移到新存储引擎后可用（重启浏览器后自动完成）。</p>
+            )}
             <button type="button" className="btn btn-danger" onClick={() => void clearLibrary()} disabled={clearing}>
               {clearing ? "清空中…" : "清空知识库"}
             </button>
