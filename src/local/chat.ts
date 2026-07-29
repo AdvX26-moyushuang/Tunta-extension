@@ -1,5 +1,5 @@
 import type { ChatCitation, ChatLocator, ChatTurn } from "@/shared/api/contracts";
-import type { StoredCard, StoredDocument } from "./db";
+import type { StoredCard, StoredDocument } from "./store/types";
 import { callChatCompletion, ProviderError } from "./provider";
 import type { ScoredCard } from "./retrieve";
 import type { LocalSettings } from "./settings";

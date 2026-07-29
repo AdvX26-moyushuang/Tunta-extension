@@ -1,6 +1,6 @@
 import type { CaptureIntent } from "@/shared/api/contracts";
 import { normalizeUrl } from "@/shared/format";
-import { getCaptureByUrl, putCapture, type StoredCapture } from "./db";
+import { getStore, type StoredCapture } from "./store";
 
 export const LIST_EXPAND_LIMIT = 20;
 
@@ -21,7 +21,7 @@ export async function expandListCaptures(input: {
   let skipped = 0;
   for (const rawLink of input.links.slice(0, LIST_EXPAND_LIMIT)) {
     const url = normalizeUrl(rawLink);
-    if (!url || (await getCaptureByUrl(url))) {
+    if (!url || (await getStore().getCaptureByUrl(url))) {
       skipped += 1;
       continue;
     }
@@ -38,7 +38,7 @@ export async function expandListCaptures(input: {
       archived: false,
       failure: null,
     };
-    await putCapture(capture);
+    await getStore().putCapture(capture);
     createdIds.push(capture.captureId);
   }
   return { createdIds, skipped };

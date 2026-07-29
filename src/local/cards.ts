@@ -1,5 +1,5 @@
 import type { CardType } from "@/shared/api/contracts";
-import type { StoredCard, StoredDocument } from "./db";
+import type { StoredCard, StoredDocument } from "./store/types";
 import type { ParserBlock } from "./parser";
 import { callChatCompletion, ProviderError } from "./provider";
 import type { LocalSettings } from "./settings";

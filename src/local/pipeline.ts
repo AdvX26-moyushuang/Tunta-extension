@@ -2,17 +2,10 @@ import type { CaptureFailure } from "@/shared/api/contracts";
 import { generateCardsForDocument } from "./cards";
 import { linkSourceIntoGraph } from "./kaleidoscope";
 import {
-  getCapture,
-  getDocument,
-  listCaptures,
-  listCardsBySource,
-  putCapture,
-  putCards,
-  putDocument,
-  replaceCardsForSource,
+  getStore,
   type StoredCapture,
   type StoredDocument,
-} from "./db";
+} from "./store";
 import { buildParserOutput, isXiaohongshuUrl } from "./parser";
 import { callEmbedding, ProviderError } from "./provider";
 import { isChatConfigured, isEmbeddingConfigured, loadSettings } from "./settings";
@@ -142,12 +135,12 @@ const queued = new Set<string>();
 
 async function save(capture: StoredCapture): Promise<StoredCapture> {
   const next = { ...capture, updatedAt: nowIso() };
-  await putCapture(next);
+  await getStore().putCapture(next);
   return next;
 }
 
 async function execute(captureId: string, tabId?: number): Promise<void> {
-  let capture = await getCapture(captureId);
+  let capture = await getStore().getCapture(captureId);
   if (!capture || capture.status === "done" || capture.archived) return;
   const settings = await loadSettings();
 
@@ -178,7 +171,7 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
         parserOutput: output,
         createdAt: nowIso(),
       };
-      await putDocument(doc);
+      await getStore().putDocument(doc);
       capture = await save({
         ...capture,
         status: "parsing",
@@ -216,16 +209,16 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
 
     
     if (capture.stage === "snapshot") {
-      const doc = capture.sourceId ? await getDocument(capture.sourceId) : undefined;
+      const doc = capture.sourceId ? await getStore().getDocument(capture.sourceId) : undefined;
       if (!doc) {
         throw new ProviderError("本地文档缺失，无法生成卡片。", "STORE_DOCUMENT_MISSING");
       }
       capture = await save({ ...capture, status: "parsing" });
       const curation = await generateCardsForDocument(settings, doc);
-      await replaceCardsForSource(doc.sourceId, curation.cards);
+      await getStore().replaceCardsForSource(doc.sourceId, curation.cards);
       
       if (curation.source.title || curation.source.summary) {
-        await putDocument({
+        await getStore().putDocument({
           ...doc,
           curatedTitle: curation.source.title ?? doc.curatedTitle,
           summary: curation.source.summary ?? doc.summary,
@@ -248,11 +241,11 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
     if (capture.stage === "cards") {
       if (isEmbeddingConfigured(settings) && capture.sourceId) {
         try {
-          const cards = await listCardsBySource(capture.sourceId);
+          const cards = await getStore().listCardsBySource(capture.sourceId);
           const pending = cards.filter((card) => !card.embedding);
           if (pending.length > 0) {
             const vectors = await callEmbedding(settings.embedding, pending.map((card) => `${card.title}\n${card.body}`));
-            await putCards(pending.map((card, index) => ({ ...card, embedding: vectors[index] })));
+            await getStore().putCards(pending.map((card, index) => ({ ...card, embedding: vectors[index] })));
           }
         } catch (cause) {
           console.warn("[tunta] embedding 阶段失败（卡片保留 FTS 检索能力）:", cause);
@@ -277,7 +270,7 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
     await save({ ...capture, status: "done", failure: null, attempts: 0 });
   } catch (cause) {
     const failure = toFailure(cause);
-    const current = await getCapture(captureId);
+    const current = await getStore().getCapture(captureId);
     if (current) await save({ ...current, status: "failed", failure });
     console.warn(`[tunta] pipeline 失败（${captureId}）:`, failure);
   }
@@ -296,7 +289,7 @@ export async function runPipeline(captureId: string, options?: { tabId?: number 
 
 
 export async function resumeStuckPipelines(): Promise<void> {
-  const captures = await listCaptures();
+  const captures = await getStore().listCaptures();
   const cutoff = Date.now() - STUCK_THRESHOLD_MS;
   const stuck = captures.filter(
     (capture) =>

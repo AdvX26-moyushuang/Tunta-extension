@@ -1,12 +1,9 @@
 import {
-  clearKaleidoscopeEdges,
-  deleteKaleidoscopeEdgesForSource,
+  getStore,
   kaleidoscopeEdgeId,
-  listDocuments,
-  putKaleidoscopeEdges,
   type StoredDocument,
   type StoredKaleidoscopeEdge,
-} from "./db";
+} from "./store";
 import { callChatCompletion, ProviderError } from "./provider";
 import type { LocalSettings } from "./settings";
 
@@ -100,7 +97,7 @@ async function computeLinks(
 }
 
 export async function linkSourceIntoGraph(settings: LocalSettings, sourceId: string): Promise<number> {
-  const documents = await listDocuments();
+  const documents = await getStore().listDocuments();
   const fresh = documents.find((doc) => doc.sourceId === sourceId);
   if (!fresh) {
     throw new ProviderError("本地文档缺失，无法计算万花筒关联。", "GRAPH_SOURCE_MISSING");
@@ -110,11 +107,11 @@ export async function linkSourceIntoGraph(settings: LocalSettings, sourceId: str
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, DIGEST_LIMIT);
 
-  await deleteKaleidoscopeEdgesForSource(sourceId);
+  await getStore().deleteKaleidoscopeEdgesForSource(sourceId);
   if (candidates.length === 0) return 0;
 
   const edges = await computeLinks(settings, fresh, candidates);
-  await putKaleidoscopeEdges(edges);
+  await getStore().putKaleidoscopeEdges(edges);
   return edges.length;
 }
 
@@ -125,14 +122,14 @@ export interface RebuildGraphResult {
 
 
 export async function rebuildAllGraphLinks(settings: LocalSettings): Promise<RebuildGraphResult> {
-  const documents = (await listDocuments()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  await clearKaleidoscopeEdges();
+  const documents = (await getStore().listDocuments()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  await getStore().clearKaleidoscopeEdges();
   let written = 0;
   for (let index = 1; index < documents.length; index += 1) {
     const fresh = documents[index]!;
     const candidates = documents.slice(0, index).slice(-DIGEST_LIMIT);
     const edges = await computeLinks(settings, fresh, candidates);
-    await putKaleidoscopeEdges(edges);
+    await getStore().putKaleidoscopeEdges(edges);
     written += edges.length;
   }
   return { sources: documents.length, edges: written };

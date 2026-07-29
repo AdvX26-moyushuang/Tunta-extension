@@ -1,4 +1,4 @@
-import type { StoredCard } from "./db";
+import type { StoredCard } from "./store/types";
 
 export type CardWithoutId = Omit<StoredCard, "cardId">;
 

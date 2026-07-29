@@ -1,5 +1,5 @@
 import type { MatchedBy } from "@/shared/api/contracts";
-import type { StoredCard } from "./db";
+import type { StoredCard } from "./store/types";
 import { cosineSimilarity, ftsScore, termFrequencies, tokenize } from "./text";
 
 export interface ScoredCard {

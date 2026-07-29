@@ -25,24 +25,10 @@ import { sendMessage } from "@/shared/messages";
 import { runChatTurn, selectCardsForOpenQuery } from "./chat";
 import { rebuildAllGraphLinks } from "./kaleidoscope";
 import {
-  clearAllLocalData,
-  getCapture,
-  getCaptureByUrl,
-  getChatTurnRecord,
-  getDocument,
-  listCaptures,
-  listCards,
-  listCardsBySource,
-  listChatTurns,
-  listDocuments,
-  listKaleidoscopeEdges,
-  pruneChatTurns,
-  putCapture,
-  putChatTurn,
-  putDocument,
+  getStore,
   type StoredCapture,
   type StoredDocument,
-} from "./db";
+} from "./store";
 import {
   buildParserOutput,
   isBilibiliListUrl,
@@ -154,7 +140,7 @@ function sourceWithCuration(doc: StoredDocument): LibrarySource {
 }
 
 async function buildLibrary(): Promise<LibraryResponse> {
-  const [documents, cards] = await Promise.all([listDocuments(), listCards()]);
+  const [documents, cards] = await Promise.all([getStore().listDocuments(), getStore().listCards()]);
   const sourceById = new Map(documents.map((doc) => [doc.sourceId, sourceWithCuration(doc)]));
   const libraryCards: LibraryCard[] = cards.map((card) => ({
     cardId: card.cardId,
@@ -244,7 +230,7 @@ function saveReviewSeen(seen: Set<string>): void {
 
 async function loadLocalReviewNext(): Promise<ReviewQueueResponse> {
   const seen = loadReviewSeen();
-  const captures = (await listCaptures()).filter(
+  const captures = (await getStore().listCaptures()).filter(
     (capture) =>
       capture.intent === "pending" &&
       !capture.archived &&
@@ -252,7 +238,7 @@ async function loadLocalReviewNext(): Promise<ReviewQueueResponse> {
       !seen.has(capture.captureId),
   );
   const cardsByCapture = await Promise.all(
-    captures.map((capture) => (capture.sourceId ? listCardsBySource(capture.sourceId) : Promise.resolve([]))),
+    captures.map((capture) => (capture.sourceId ? getStore().listCardsBySource(capture.sourceId) : Promise.resolve([]))),
   );
   const selection = chooseReviewCandidate(
     captures.map((capture, index) => ({
@@ -267,7 +253,7 @@ async function loadLocalReviewNext(): Promise<ReviewQueueResponse> {
 
   saveReviewSeen(selection.seen);
   const { capture, cards } = selection.candidate;
-  const doc = capture.sourceId ? await getDocument(capture.sourceId) : undefined;
+  const doc = capture.sourceId ? await getStore().getDocument(capture.sourceId) : undefined;
   const first = cards[0];
   return {
     item: {
@@ -310,7 +296,7 @@ export function createLocalApi(): TuntaApi {
     getLibrary: () => buildLibrary(),
 
     getKaleidoscope: async (): Promise<KaleidoscopeGraph> => {
-      const [documents, cards, edges] = await Promise.all([listDocuments(), listCards(), listKaleidoscopeEdges()]);
+      const [documents, cards, edges] = await Promise.all([getStore().listDocuments(), getStore().listCards(), getStore().listKaleidoscopeEdges()]);
       const cardCountBySource = new Map<string, number>();
       for (const card of cards) {
         cardCountBySource.set(card.sourceId, (cardCountBySource.get(card.sourceId) ?? 0) + 1);
@@ -342,7 +328,7 @@ export function createLocalApi(): TuntaApi {
 
     retrieve: async (query, topK = 8): Promise<RetrieveResponse> => {
       const started = Date.now();
-      const [cards, settings] = await Promise.all([listCards(), loadSettings()]);
+      const [cards, settings] = await Promise.all([getStore().listCards(), loadSettings()]);
       let queryEmbedding: number[] | null = null;
       if (isEmbeddingConfigured(settings)) {
         try {
@@ -352,7 +338,7 @@ export function createLocalApi(): TuntaApi {
         }
       }
       const hits = retrieveCards(cards, query, topK, queryEmbedding);
-      const documents = new Map((await listDocuments()).map((doc) => [doc.sourceId, doc]));
+      const documents = new Map((await getStore().listDocuments()).map((doc) => [doc.sourceId, doc]));
       return {
         hits: hits.map((hit) => {
           const doc = documents.get(hit.card.sourceId);
@@ -381,7 +367,7 @@ export function createLocalApi(): TuntaApi {
       if (!isChatConfigured(settings)) {
         throw new ApiError("尚未配置 provider：请在工作台「设置」页填写 API key 后再提问。", 400, "PROVIDER_NOT_CONFIGURED");
       }
-      const cards = await listCards();
+      const cards = await getStore().listCards();
       let queryEmbedding: number[] | null = null;
       if (isEmbeddingConfigured(settings)) {
         try {
@@ -401,16 +387,16 @@ export function createLocalApi(): TuntaApi {
           hits = [];
         }
       }
-      const documents = new Map((await listDocuments()).map((doc) => [doc.sourceId, doc]));
+      const documents = new Map((await getStore().listDocuments()).map((doc) => [doc.sourceId, doc]));
       const turn = await runChatTurn({ query, hits, documents, settings });
       
-      await putChatTurn({ queryId: turn.query_id, query, createdAt: nowIso(), turn });
-      void pruneChatTurns().catch((cause) => console.warn("[tunta] 历史淘汰失败:", cause));
+      await getStore().putChatTurn({ queryId: turn.query_id, query, createdAt: nowIso(), turn });
+      void getStore().pruneChatTurns().catch((cause) => console.warn("[tunta] 历史淘汰失败:", cause));
       return turn;
     },
 
     listChatHistory: async (): Promise<ChatHistoryEntry[]> =>
-      (await listChatTurns()).map((record) => ({
+      (await getStore().listChatTurns()).map((record) => ({
         query_id: record.queryId,
         query: record.query,
         status: record.turn.status,
@@ -419,7 +405,7 @@ export function createLocalApi(): TuntaApi {
         citationCount: record.turn.citations.length,
       })),
 
-    getChatTurn: async (queryId): Promise<ChatTurn | null> => (await getChatTurnRecord(queryId))?.turn ?? null,
+    getChatTurn: async (queryId): Promise<ChatTurn | null> => (await getStore().getChatTurnRecord(queryId))?.turn ?? null,
 
     submitCapture: async (request: SubmitCaptureRequest, options?: SubmitCaptureOptions): Promise<SubmitCaptureResult> => {
       if (!isExtensionContext()) {
@@ -443,7 +429,7 @@ export function createLocalApi(): TuntaApi {
       if (isBilibiliListUrl(url)) {
         await ensureOriginPermission(LIST_CHILD_ORIGIN);
       }
-      const existing = await getCaptureByUrl(url);
+      const existing = await getStore().getCaptureByUrl(url);
       if (existing) {
         return { capture: toPublicCapture(existing), duplicate: true };
       }
@@ -477,7 +463,7 @@ export function createLocalApi(): TuntaApi {
           parserOutput: output,
           createdAt: nowIso(),
         };
-        await putDocument(doc);
+        await getStore().putDocument(doc);
         const capture: StoredCapture = {
           captureId,
           url,
@@ -493,7 +479,7 @@ export function createLocalApi(): TuntaApi {
           ...(options.snapshot.listLinks?.length ? { expandLinks: options.snapshot.listLinks } : {}),
           ...(options.snapshot.degradedNote ? { curationNote: options.snapshot.degradedNote } : {}),
         };
-        await putCapture(capture);
+        await getStore().putCapture(capture);
         sendMessage({ type: "tunta:run-pipeline", captureId });
         return { capture: toPublicCapture(capture), duplicate: false };
       }
@@ -510,36 +496,36 @@ export function createLocalApi(): TuntaApi {
         archived: false,
         failure: null,
       };
-      await putCapture(capture);
+      await getStore().putCapture(capture);
       sendMessage({ type: "tunta:run-pipeline", captureId: capture.captureId, tabId: options?.tabId });
       return { capture: toPublicCapture(capture), duplicate: false };
     },
 
-    listCaptures: async (): Promise<CaptureItem[]> => (await listCaptures()).map(toPublicCapture),
+    listCaptures: async (): Promise<CaptureItem[]> => (await getStore().listCaptures()).map(toPublicCapture),
 
     updateCaptureIntent: async (captureId, intent: CaptureIntent): Promise<CaptureItem> => {
-      const capture = await getCapture(captureId);
+      const capture = await getStore().getCapture(captureId);
       if (!capture) throw new ApiError(`收藏不存在：${captureId}`, 404, "CAPTURE_NOT_FOUND");
       const next = { ...capture, intent, updatedAt: nowIso() };
-      await putCapture(next);
+      await getStore().putCapture(next);
       return toPublicCapture(next);
     },
 
     retryCapture: async (captureId): Promise<CaptureItem> => {
-      const capture = await getCapture(captureId);
+      const capture = await getStore().getCapture(captureId);
       if (!capture) throw new ApiError(`收藏不存在：${captureId}`, 404, "CAPTURE_NOT_FOUND");
       
 
       const next = { ...capture, status: "idle" as const, failure: null, attempts: 0, updatedAt: nowIso() };
-      await putCapture(next);
+      await getStore().putCapture(next);
       sendMessage({ type: "tunta:run-pipeline", captureId });
       return toPublicCapture(next);
     },
 
     archiveCapture: async (captureId): Promise<void> => {
-      const capture = await getCapture(captureId);
+      const capture = await getStore().getCapture(captureId);
       if (!capture) throw new ApiError(`收藏不存在：${captureId}`, 404, "CAPTURE_NOT_FOUND");
-      await putCapture({ ...capture, archived: true, updatedAt: nowIso() });
+      await getStore().putCapture({ ...capture, archived: true, updatedAt: nowIso() });
     },
 
     getReviewNext,
@@ -552,7 +538,7 @@ export function createLocalApi(): TuntaApi {
 
     clearLibrary: async (): Promise<void> => {
       
-      await clearAllLocalData();
+      await getStore().clearAllLocalData();
       globalThis.localStorage?.removeItem(REVIEW_SEEN_KEY);
     },
   };
