@@ -11,7 +11,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "tsc -p tsconfig.test.json && node --test .test-dist/local/cards.test.js .test-dist/local/parser.test.js .test-dist/local/review.test.js .test-dist/local/text.test.js .test-dist/local/store/store-contract.test.js .test-dist/local/store/migrate.test.js",
+    "test": "tsc -p tsconfig.test.json && node --test .test-dist/local/cards.test.js .test-dist/local/parser.test.js .test-dist/local/review.test.js .test-dist/local/text.test.js .test-dist/local/chunk.test.js .test-dist/local/store/store-contract.test.js .test-dist/local/store/migrate.test.js",
     "typecheck": "tsc --noEmit",
     "icons": "node scripts/gen_ext_icons.mjs"
   },

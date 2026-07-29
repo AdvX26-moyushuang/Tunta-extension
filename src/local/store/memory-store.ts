@@ -11,6 +11,7 @@ import {
   type StoredCapture,
   type StoredCard,
   type StoredChatTurn,
+  type StoredChunk,
   type StoredDocument,
   type StoredEmbedding,
   type StoredKaleidoscopeEdge,
@@ -33,6 +34,7 @@ export class MemoryStore implements TuntaStore {
   private chatTurns = new Map<string, StoredChatTurn>();
   private kaleidoscopeEdges = new Map<string, StoredKaleidoscopeEdge>();
   private embeddings = new Map<string, StoredEmbedding>();
+  private chunks = new Map<string, StoredChunk>();
 
   // captures
 
@@ -112,6 +114,22 @@ export class MemoryStore implements TuntaStore {
     return searchCardsByBm25([...this.cards.values()], query, limit);
   }
 
+  // chunks
+
+  async replaceChunksForSource(sourceId: string, chunks: StoredChunk[]): Promise<void> {
+    if (chunks.some((chunk) => chunk.sourceId !== sourceId)) {
+      throw new Error(`replaceChunksForSource 收到跨 source chunk：${sourceId}`);
+    }
+    for (const [chunkId, chunk] of this.chunks) {
+      if (chunk.sourceId === sourceId) this.chunks.delete(chunkId);
+    }
+    for (const chunk of chunks) this.chunks.set(chunk.chunkId, clone(chunk));
+  }
+
+  async listChunksBySource(sourceId: string): Promise<StoredChunk[]> {
+    return [...this.chunks.values()].filter((chunk) => chunk.sourceId === sourceId).map(clone);
+  }
+
   // embeddings
 
   async putEmbeddings(embeddings: StoredEmbedding[]): Promise<void> {
@@ -130,6 +148,12 @@ export class MemoryStore implements TuntaStore {
 
   async listEmbeddingModels(): Promise<EmbeddingModelInfo[]> {
     return summarizeEmbeddingModels([...this.embeddings.values()]);
+  }
+
+  async listEmbeddedOwnerIds(ownerKind: StoredEmbedding["ownerKind"], model: string): Promise<string[]> {
+    return [...this.embeddings.values()]
+      .filter((item) => item.ownerKind === ownerKind && item.model === model)
+      .map((item) => item.ownerId);
   }
 
   async deleteEmbeddings(ownerKind: StoredEmbedding["ownerKind"], ownerIds: string[]): Promise<void> {
@@ -191,5 +215,6 @@ export class MemoryStore implements TuntaStore {
     this.chatTurns.clear();
     this.kaleidoscopeEdges.clear();
     this.embeddings.clear();
+    this.chunks.clear();
   }
 }

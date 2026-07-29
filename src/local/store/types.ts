@@ -52,6 +52,17 @@ export interface StoredKaleidoscopeEdge {
 
 export const CHAT_HISTORY_LIMIT = 100;
 
+// ---- chunks（计划 §Task2.3） ----
+
+/** 原文聚合块的持久化形态：embeddings 表只存 chunkId 引用，检索命中时回这里取正文与 blockIds。 */
+export interface StoredChunk {
+  chunkId: string;
+  sourceId: string;
+  text: string;
+  blockIds: string[];
+  createdAt: string;
+}
+
 // ---- embeddings（计划 §Task2.2） ----
 
 /**
@@ -167,12 +178,18 @@ export interface TuntaStore {
   /** FTS 检索（计划 §Task2.1）：SQL 实现走 FTS5 bm25，其余实现走等价 JS BM25。 */
   searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]>;
 
+  // chunks（计划 §Task2.3）
+  replaceChunksForSource(sourceId: string, chunks: StoredChunk[]): Promise<void>;
+  listChunksBySource(sourceId: string): Promise<StoredChunk[]>;
+
   // embeddings（计划 §Task2.2）
   /** 写入前统一 L2 归一化；同 (ownerKind, ownerId, model) 覆盖更新。 */
   putEmbeddings(embeddings: StoredEmbedding[]): Promise<void>;
   /** 向量检索下沉到 store：避免每次查询把全部向量搬过 RPC。只比对同 model 同维度。 */
   searchEmbeddings(queryVector: number[], model: string, topK: number, ownerKind?: StoredEmbedding["ownerKind"]): Promise<EmbeddingHit[]>;
   listEmbeddingModels(): Promise<EmbeddingModelInfo[]>;
+  /** embed 去重用（计划 §Task2.3 禁止重复 embed）：该 model 下已有向量的 owner id 全集。 */
+  listEmbeddedOwnerIds(ownerKind: StoredEmbedding["ownerKind"], model: string): Promise<string[]>;
   deleteEmbeddings(ownerKind: StoredEmbedding["ownerKind"], ownerIds: string[]): Promise<void>;
 
   // chat history

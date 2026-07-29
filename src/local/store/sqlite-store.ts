@@ -7,6 +7,7 @@ import type {
   StoredCapture,
   StoredCard,
   StoredChatTurn,
+  StoredChunk,
   StoredDocument,
   StoredEmbedding,
   StoredKaleidoscopeEdge,
@@ -80,6 +81,14 @@ export class SqliteStore implements TuntaStore {
     return call("searchCardsFts", [query, limit]);
   }
 
+  replaceChunksForSource(sourceId: string, chunks: StoredChunk[]): Promise<void> {
+    return call("replaceChunksForSource", [sourceId, chunks]);
+  }
+
+  listChunksBySource(sourceId: string): Promise<StoredChunk[]> {
+    return call("listChunksBySource", [sourceId]);
+  }
+
   putEmbeddings(embeddings: StoredEmbedding[]): Promise<void> {
     return call("putEmbeddings", [embeddings]);
   }
@@ -90,6 +99,10 @@ export class SqliteStore implements TuntaStore {
 
   listEmbeddingModels(): Promise<EmbeddingModelInfo[]> {
     return call("listEmbeddingModels", []);
+  }
+
+  listEmbeddedOwnerIds(ownerKind: StoredEmbedding["ownerKind"], model: string): Promise<string[]> {
+    return call("listEmbeddedOwnerIds", [ownerKind, model]);
   }
 
   deleteEmbeddings(ownerKind: StoredEmbedding["ownerKind"], ownerIds: string[]): Promise<void> {

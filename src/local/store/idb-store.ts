@@ -11,6 +11,7 @@ import {
   type StoredCapture,
   type StoredCard,
   type StoredChatTurn,
+  type StoredChunk,
   type StoredDocument,
   type StoredEmbedding,
   type StoredKaleidoscopeEdge,
@@ -18,7 +19,7 @@ import {
 } from "./types";
 
 const DB_NAME = "tunta-local";
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -49,6 +50,10 @@ function openDb(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains("embeddings")) {
           // 与 SQL 主键 (owner_kind, owner_id, model) 对齐
           db.createObjectStore("embeddings", { keyPath: ["ownerKind", "ownerId", "model"] });
+        }
+        if (!db.objectStoreNames.contains("chunks")) {
+          const chunks = db.createObjectStore("chunks", { keyPath: "chunkId" });
+          chunks.createIndex("sourceId", "sourceId", { unique: false });
         }
         const cards = request.transaction?.objectStore("cards");
         if (cards) {
@@ -82,7 +87,7 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges" | "embeddings";
+type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges" | "embeddings" | "chunks";
 
 async function withStore<T>(store: StoreName, mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const db = await openDb();
@@ -206,6 +211,41 @@ export class IdbStore implements TuntaStore {
     return searchCardsByBm25(await this.listCards(), query, limit);
   }
 
+  // chunks（计划 §Task2.3）
+
+  async replaceChunksForSource(sourceId: string, chunks: StoredChunk[]): Promise<void> {
+    if (chunks.some((chunk) => chunk.sourceId !== sourceId)) {
+      throw new Error(`replaceChunksForSource 收到跨 source chunk：${sourceId}`);
+    }
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("chunks", "readwrite");
+      const store = tx.objectStore("chunks");
+      const cursorRequest = store.index("sourceId").openKeyCursor(IDBKeyRange.only(sourceId));
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (cursor) {
+          store.delete(cursor.primaryKey);
+          cursor.continue();
+          return;
+        }
+        for (const chunk of chunks) store.put(chunk);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("IDB chunks source replace failed"));
+    });
+  }
+
+  async listChunksBySource(sourceId: string): Promise<StoredChunk[]> {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("chunks", "readonly");
+      const request = tx.objectStore("chunks").index("sourceId").getAll(sourceId);
+      request.onsuccess = () => resolve(request.result as StoredChunk[]);
+      request.onerror = () => reject(request.error ?? new Error("IDB chunks by source failed"));
+    });
+  }
+
   // embeddings（迁移前退路也要持久化：Task2.3 的 embed 去重不能在未迁移用户上失效）
 
   async putEmbeddings(embeddings: StoredEmbedding[]): Promise<void> {
@@ -227,6 +267,12 @@ export class IdbStore implements TuntaStore {
 
   async listEmbeddingModels(): Promise<EmbeddingModelInfo[]> {
     return summarizeEmbeddingModels(await getAll<StoredEmbedding>("embeddings"));
+  }
+
+  async listEmbeddedOwnerIds(ownerKind: StoredEmbedding["ownerKind"], model: string): Promise<string[]> {
+    return (await getAll<StoredEmbedding>("embeddings"))
+      .filter((item) => item.ownerKind === ownerKind && item.model === model)
+      .map((item) => item.ownerId);
   }
 
   async deleteEmbeddings(ownerKind: StoredEmbedding["ownerKind"], ownerIds: string[]): Promise<void> {
@@ -321,13 +367,14 @@ export class IdbStore implements TuntaStore {
   async clearAllLocalData(): Promise<void> {
     const db = await openDb();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges", "embeddings"], "readwrite");
+      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges", "embeddings", "chunks"], "readwrite");
       tx.objectStore("captures").clear();
       tx.objectStore("documents").clear();
       tx.objectStore("cards").clear();
       tx.objectStore("chat_history").clear();
       tx.objectStore("kaleidoscope_edges").clear();
       tx.objectStore("embeddings").clear();
+      tx.objectStore("chunks").clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error ?? new Error("IDB clearAll failed"));
     });

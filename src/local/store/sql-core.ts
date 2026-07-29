@@ -8,6 +8,7 @@ import {
   type StoredCapture,
   type StoredCard,
   type StoredChatTurn,
+  type StoredChunk,
   type StoredDocument,
   type StoredEmbedding,
   type StoredKaleidoscopeEdge,
@@ -25,7 +26,7 @@ export interface SqlDriver {
   query(sql: string, params?: SqlValue[]): Promise<Record<string, unknown>[]>;
 }
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /** 计划 §Task1.3 的三张表 + TuntaStore 需要的 chat_history / kaleidoscope_edges。 */
 const SCHEMA_V1 = `
@@ -101,11 +102,27 @@ CREATE TABLE embeddings (
 );
 `;
 
+/**
+ * 原文聚合块（计划 §Task2.3）：chunk 本体持久化，embeddings 只存 chunkId 引用。
+ * 不重算的理由：聚合算法迭代后旧向量引用的 chunk 仍能回查到当时的正文。
+ */
+const SCHEMA_V5 = `
+CREATE TABLE chunks (
+  chunk_id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  block_ids TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_chunks_source ON chunks(source_id);
+`;
+
 const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)> = {
   1: SCHEMA_V1,
   2: SCHEMA_V2,
   3: migrateV3,
   4: SCHEMA_V4,
+  5: SCHEMA_V5,
 };
 
 /**
@@ -246,6 +263,16 @@ function rowToEdge(row: Row): StoredKaleidoscopeEdge {
     toSourceId: row.to_source_id as string,
     relation: row.relation as string,
     strength: Number(row.strength),
+    createdAt: row.created_at as string,
+  };
+}
+
+function rowToChunk(row: Row): StoredChunk {
+  return {
+    chunkId: row.chunk_id as string,
+    sourceId: row.source_id as string,
+    text: row.text as string,
+    blockIds: parse<string[]>(row.block_ids) ?? [],
     createdAt: row.created_at as string,
   };
 }
@@ -434,6 +461,27 @@ export class SqlCore implements TuntaStore {
     return rows.map((row) => ({ cardId: row.card_id as string, score: Number(row.score) }));
   }
 
+  // chunks（计划 §Task2.3）
+
+  async replaceChunksForSource(sourceId: string, chunks: StoredChunk[]): Promise<void> {
+    if (chunks.some((chunk) => chunk.sourceId !== sourceId)) {
+      throw new Error(`replaceChunksForSource 收到跨 source chunk：${sourceId}`);
+    }
+    await this.inTransaction(async () => {
+      await this.driver.exec("DELETE FROM chunks WHERE source_id = ?", [sourceId]);
+      for (const chunk of chunks) {
+        await this.driver.exec(
+          "INSERT INTO chunks (chunk_id, source_id, text, block_ids, created_at) VALUES (?, ?, ?, ?, ?)",
+          [chunk.chunkId, chunk.sourceId, chunk.text, json(chunk.blockIds) as string, chunk.createdAt],
+        );
+      }
+    });
+  }
+
+  async listChunksBySource(sourceId: string): Promise<StoredChunk[]> {
+    return (await this.rows("SELECT * FROM chunks WHERE source_id = ?", [sourceId])).map(rowToChunk);
+  }
+
   // embeddings
 
   /** BLOB 读回是 Uint8Array；字节偏移非 4 对齐时拷一份（Float32Array 视图要求对齐）。 */
@@ -485,6 +533,11 @@ export class SqlCore implements TuntaStore {
       "SELECT model, dim, COUNT(*) AS count FROM embeddings GROUP BY model, dim ORDER BY model, dim",
     );
     return rows.map((row) => ({ model: row.model as string, dim: Number(row.dim), count: Number(row.count) }));
+  }
+
+  async listEmbeddedOwnerIds(ownerKind: StoredEmbedding["ownerKind"], model: string): Promise<string[]> {
+    const rows = await this.rows("SELECT owner_id FROM embeddings WHERE owner_kind = ? AND model = ?", [ownerKind, model]);
+    return rows.map((row) => row.owner_id as string);
   }
 
   async deleteEmbeddings(ownerKind: StoredEmbedding["ownerKind"], ownerIds: string[]): Promise<void> {
@@ -561,6 +614,7 @@ export class SqlCore implements TuntaStore {
     await this.inTransaction(async () => {
       await this.driver.exec("DELETE FROM cards_fts");
       await this.driver.exec("DELETE FROM embeddings");
+      await this.driver.exec("DELETE FROM chunks");
       await this.driver.exec("DELETE FROM cards");
       await this.driver.exec("DELETE FROM card_states");
       await this.driver.exec("DELETE FROM chat_history");

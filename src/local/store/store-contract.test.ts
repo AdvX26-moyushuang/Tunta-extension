@@ -7,6 +7,7 @@ import type {
   StoredCapture,
   StoredCard,
   StoredChatTurn,
+  StoredChunk,
   StoredDocument,
   StoredEmbedding,
   StoredKaleidoscopeEdge,
@@ -145,6 +146,16 @@ function makeEmbedding(overrides: Partial<StoredEmbedding> & { ownerId: string; 
     model: "test-model",
     createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
+  };
+}
+
+function makeChunk(chunkId: string, sourceId: string): StoredChunk {
+  return {
+    chunkId,
+    sourceId,
+    text: `原文片段 ${chunkId}`,
+    blockIds: ["block:paragraph:000", "block:paragraph:001"],
+    createdAt: "2026-01-01T00:00:00.000Z",
   };
 }
 
@@ -376,7 +387,37 @@ for (const impl of implementations) {
     assert.equal((await store.listEmbeddingModels()).length, 2);
   });
 
-  test(`[${impl.name}] clearAllLocalData：六张表全部清空`, async () => {
+  test(`[${impl.name}] chunks：replaceChunksForSource 只替换本 source，跨 source 报错`, async () => {
+    const store = impl.create();
+    await store.replaceChunksForSource("src-a", [makeChunk("chunk:src-a:000", "src-a"), makeChunk("chunk:src-a:001", "src-a")]);
+    await store.replaceChunksForSource("src-b", [makeChunk("chunk:src-b:000", "src-b")]);
+    assert.equal((await store.listChunksBySource("src-a")).length, 2);
+    assert.deepEqual((await store.listChunksBySource("src-a"))[0]?.blockIds, ["block:paragraph:000", "block:paragraph:001"]);
+
+    // 重新聚合：本 source 全量替换，其他 source 不受影响
+    await store.replaceChunksForSource("src-a", [makeChunk("chunk:src-a:000", "src-a")]);
+    assert.deepEqual((await store.listChunksBySource("src-a")).map((chunk) => chunk.chunkId), ["chunk:src-a:000"]);
+    assert.equal((await store.listChunksBySource("src-b")).length, 1);
+
+    await assert.rejects(store.replaceChunksForSource("src-a", [makeChunk("chunk:src-b:009", "src-b")]), /跨 source/);
+    await store.replaceChunksForSource("src-a", []);
+    assert.equal((await store.listChunksBySource("src-a")).length, 0);
+  });
+
+  test(`[${impl.name}] embeddings：listEmbeddedOwnerIds 按 ownerKind + model 去重查表`, async () => {
+    const store = impl.create();
+    await store.putEmbeddings([
+      makeEmbedding({ ownerId: "card:1", vector: [1, 0] }),
+      makeEmbedding({ ownerId: "chunk:src-a:000", ownerKind: "chunk", vector: [0, 1] }),
+      makeEmbedding({ ownerId: "card:legacy", model: "legacy-model", vector: [1, 1] }),
+    ]);
+    // 只返回指定 ownerKind + model 的 id：Task2.3 的 embed 去重靠这个查表命中
+    assert.deepEqual(await store.listEmbeddedOwnerIds("card", "test-model"), ["card:1"]);
+    assert.deepEqual(await store.listEmbeddedOwnerIds("chunk", "test-model"), ["chunk:src-a:000"]);
+    assert.deepEqual(await store.listEmbeddedOwnerIds("chunk", "legacy-model"), []);
+  });
+
+  test(`[${impl.name}] clearAllLocalData：七张表全部清空`, async () => {
     const store = impl.create();
     await store.putCapture(makeCapture({ captureId: "c1", url: "https://a.com" }));
     await store.putDocument(makeDocument("src-1"));
@@ -384,6 +425,7 @@ for (const impl of implementations) {
     await store.putChatTurn(makeChatTurn("q1", "2026-01-01T00:00:00.000Z"));
     await store.putKaleidoscopeEdges([makeEdge("s1", "s2")]);
     await store.putEmbeddings([makeEmbedding({ ownerId: "card:1", vector: [1, 0] })]);
+    await store.replaceChunksForSource("src-1", [makeChunk("chunk:src-1:000", "src-1")]);
 
     await store.clearAllLocalData();
     assert.equal((await store.listCaptures()).length, 0);
@@ -393,6 +435,7 @@ for (const impl of implementations) {
     assert.equal((await store.listKaleidoscopeEdges()).length, 0);
     assert.deepEqual(await store.searchCardsFts("标题", 10), []);
     assert.deepEqual(await store.listEmbeddingModels(), []);
+    assert.deepEqual(await store.listChunksBySource("src-1"), []);
   });
 }
 
@@ -421,26 +464,28 @@ test("card_states：策展重跑（replaceCardsForSource）不影响用户状态
   assert.equal(Number(states[0].starred), 1);
 
   const versionRows = await driver.query("PRAGMA user_version");
-  assert.equal(Number(versionRows[0]?.user_version), 4);
+  assert.equal(Number(versionRows[0]?.user_version), 5);
 });
 
 // ---- cards_fts（计划 §Task2.1）：V2 → V3 升级时存量卡片回填索引 ----
 
 test("cards_fts：V2 库升级到 V3 时存量卡片可检索", async () => {
   const driver = createNodeDriver();
-  // 先把库建到最新版，再回退成「已有卡片的 V2 库」：删 V3/V4 的表 + 降 user_version
+  // 先把库建到最新版，再回退成「已有卡片的 V2 库」：删 V3+ 的表 + 降 user_version
   const bootstrap = new SqlCore(driver);
   await bootstrap.putDocument(makeDocument("src-old"));
   await bootstrap.putCards([makeCard({ cardId: "card:legacy", sourceId: "src-old", title: "机器学习旧卡", body: "升级前就存在" })]);
   await driver.exec("DROP TABLE cards_fts");
   await driver.exec("DROP TABLE embeddings");
+  await driver.exec("DROP TABLE chunks");
   await driver.exec("PRAGMA user_version = 2");
 
-  // 重新初始化：migrateV3 建表并回填存量卡片，V4 补齐 embeddings 表
+  // 重新初始化：migrateV3 建表并回填存量卡片，V4/V5 补齐 embeddings / chunks 表
   const upgraded = new SqlCore(driver);
   const hits = await upgraded.searchCardsFts("机器学习", 10);
   assert.equal(hits[0]?.cardId, "card:legacy");
   assert.deepEqual(await upgraded.listEmbeddingModels(), []);
+  assert.deepEqual(await upgraded.listChunksBySource("src-old"), []);
 });
 
 // ---- 向量检索性能（计划 §Task2.2 验收）：1000 条向量单次检索 <20ms ----

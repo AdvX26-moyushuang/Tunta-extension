@@ -1,5 +1,6 @@
 import type { CaptureFailure } from "@/shared/api/contracts";
 import { generateCardsForDocument } from "./cards";
+import { chunkBlocks } from "./chunk";
 import { linkSourceIntoGraph } from "./kaleidoscope";
 import {
   getStore,
@@ -8,7 +9,7 @@ import {
 } from "./store";
 import { buildParserOutput, isXiaohongshuUrl } from "./parser";
 import { callEmbedding, ProviderError } from "./provider";
-import { isChatConfigured, isEmbeddingConfigured, loadSettings } from "./settings";
+import { isChatConfigured, isEmbeddingConfigured, loadSettings, type LocalSettings } from "./settings";
 import { expandListCaptures } from "./expand";
 import { executeSnapshotOnTab, SnapshotError, type SnapshotData } from "./snapshot";
 
@@ -139,6 +140,53 @@ async function save(capture: StoredCapture): Promise<StoredCapture> {
   return next;
 }
 
+/** chunk 批量 embed 的单次输入上限：长视频 30~80 个 chunk 分 2~3 次请求，不撞 provider 限制。 */
+const CHUNK_EMBED_BATCH = 32;
+
+/**
+ * embed 阶段主体（计划 §Task2.3）：cards 与原文 chunks 都写 embeddings 表。
+ * 写入前查表去重：同一 source 重跑流水线不会重复烧 embedding 配额。
+ */
+async function embedSourceContent(settings: LocalSettings, sourceId: string): Promise<void> {
+  const model = settings.embedding.model;
+  const createdAt = nowIso();
+
+  // cards：缺向量的补 embed；已有 card.embedding 的只回填 embeddings 表（视为当前模型，换模型盘点走 listEmbeddingModels）
+  const embeddedCards = new Set(await getStore().listEmbeddedOwnerIds("card", model));
+  const cards = (await getStore().listCardsBySource(sourceId)).filter((card) => !embeddedCards.has(card.cardId));
+  const pending = cards.filter((card) => !card.embedding?.length);
+  if (pending.length > 0) {
+    const vectors = await callEmbedding(settings.embedding, pending.map((card) => `${card.title}\n${card.body}`));
+    // retrieve 的向量路径暂仍读 card.embedding，双写到 Task2.3b 切换后移除
+    await getStore().putCards(pending.map((card, index) => ({ ...card, embedding: vectors[index] })));
+    pending.forEach((card, index) => { card.embedding = vectors[index]; });
+  }
+  await getStore().putEmbeddings(
+    cards
+      .filter((card) => card.embedding?.length)
+      .map((card) => ({ ownerKind: "card" as const, ownerId: card.cardId, model, vector: card.embedding as number[], createdAt })),
+  );
+
+  // chunks：先持久化 chunk 本体再分批 embed；重新聚合后消失的旧 chunk 向量一并清掉
+  const doc = await getStore().getDocument(sourceId);
+  if (!doc) return;
+  const chunks = chunkBlocks(sourceId, doc.parserOutput.blocks);
+  const currentIds = new Set(chunks.map((chunk) => chunk.chunkId));
+  const stale = (await getStore().listChunksBySource(sourceId)).filter((chunk) => !currentIds.has(chunk.chunkId));
+  if (stale.length > 0) await getStore().deleteEmbeddings("chunk", stale.map((chunk) => chunk.chunkId));
+  await getStore().replaceChunksForSource(sourceId, chunks.map((chunk) => ({ ...chunk, createdAt })));
+
+  const embeddedChunks = new Set(await getStore().listEmbeddedOwnerIds("chunk", model));
+  const pendingChunks = chunks.filter((chunk) => !embeddedChunks.has(chunk.chunkId));
+  for (let start = 0; start < pendingChunks.length; start += CHUNK_EMBED_BATCH) {
+    const batch = pendingChunks.slice(start, start + CHUNK_EMBED_BATCH);
+    const vectors = await callEmbedding(settings.embedding, batch.map((chunk) => chunk.text));
+    await getStore().putEmbeddings(
+      batch.map((chunk, index) => ({ ownerKind: "chunk" as const, ownerId: chunk.chunkId, model, vector: vectors[index], createdAt })),
+    );
+  }
+}
+
 async function execute(captureId: string, tabId?: number): Promise<void> {
   let capture = await getStore().getCapture(captureId);
   if (!capture || capture.status === "done" || capture.archived) return;
@@ -241,12 +289,7 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
     if (capture.stage === "cards") {
       if (isEmbeddingConfigured(settings) && capture.sourceId) {
         try {
-          const cards = await getStore().listCardsBySource(capture.sourceId);
-          const pending = cards.filter((card) => !card.embedding);
-          if (pending.length > 0) {
-            const vectors = await callEmbedding(settings.embedding, pending.map((card) => `${card.title}\n${card.body}`));
-            await getStore().putCards(pending.map((card, index) => ({ ...card, embedding: vectors[index] })));
-          }
+          await embedSourceContent(settings, capture.sourceId);
         } catch (cause) {
           console.warn("[tunta] embedding 阶段失败（卡片保留 FTS 检索能力）:", cause);
         }
