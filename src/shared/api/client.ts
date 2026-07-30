@@ -20,6 +20,7 @@ import type {
   ConfirmProposalResponse,
   EntityMentionInfo,
   KaleidoscopeEdgeExplanation,
+  KaleidoscopeEntityGraph,
   KaleidoscopeGraph,
   KaleidoscopeRebuildResult,
   LibraryResponse,
@@ -52,8 +53,10 @@ export interface TuntaApi {
   updateCardState(cardId: string, patch: UpdateCardStateRequest): Promise<CardStateInfo>;
   /** GET /api/entity-mentions —— 实体 mention 全量（n 小，前端自行 join 卡片，计划 §Task5.3） */
   listEntityMentions(): Promise<EntityMentionInfo[]>;
-  /** GET /api/kaleidoscope —— 万花筒知识图谱（来源节点 + 实体共现关联边） */
+  /** GET /api/kaleidoscope —— 来源视图（来源节点 + 实体共现派生的关联边） */
   getKaleidoscope(): Promise<KaleidoscopeGraph>;
+  /** GET /api/kaleidoscope/entities —— 概念视图（万花筒默认，实体节点 + 共现边） */
+  getEntityGraph(): Promise<KaleidoscopeEntityGraph>;
   /** POST /api/kaleidoscope/rebuild —— 实体共现纯计算重建（零 provider 调用） */
   rebuildKaleidoscope(): Promise<KaleidoscopeRebuildResult>;
   /** POST /api/kaleidoscope/edges/{edgeId}/explain —— 边解释懒加载（命中缓存零 LLM，计划 §Task3.5） */
@@ -134,6 +137,7 @@ export function createRealApi(baseUrl: string): TuntaApi {
       }),
     listEntityMentions: () => request<EntityMentionInfo[]>("/api/entity-mentions"),
     getKaleidoscope: () => request<KaleidoscopeGraph>("/api/kaleidoscope"),
+    getEntityGraph: () => request<KaleidoscopeEntityGraph>("/api/kaleidoscope/entities"),
     rebuildKaleidoscope: () =>
       request<KaleidoscopeRebuildResult>("/api/kaleidoscope/rebuild", { method: "POST" }),
     explainKaleidoscopeEdge: (edgeId) =>

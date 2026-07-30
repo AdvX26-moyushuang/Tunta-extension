@@ -4,6 +4,7 @@ import { getApi } from "@/shared/api";
 import type {
   EntityMentionInfo,
   KaleidoscopeEdge,
+  KaleidoscopeEntityGraph,
   KaleidoscopeGraph,
   KaleidoscopeNode,
   LibraryCard,
@@ -16,15 +17,23 @@ interface KaleidoscopePageProps {
   onToast: (message: string) => void;
 }
 
+/** 概念视图是默认：实体是索引、卡片是内容、来源是出处。 */
+type GraphMode = "entity" | "source";
+
 /**
- * 万花筒：收藏来源的知识图谱。
- * 每次新收藏完成策展后，后台流水线用实体共现纯计算重建关联边
- * （见 src/local/kaleidoscope.ts，零 LLM）；这里只负责读取与渲染。
- * 节点大小反映该来源的卡片数量，边解释懒加载（计划 §Task3.5）：
- * 点「为何相关」才调 LLM，结果缓存后不再重复调用。
+ * 万花筒：知识图谱。
+ *
+ * 默认「概念」视图——节点是实体，边是实体共现（纯计算，零 LLM）。这是三层下钻的
+ * 入口：点概念 → 侧栏列出提到它的卡片（按来源分组）→ 点卡片回到原文位置。
+ * 概念图节点按跨来源数截断到 nodeLimit，超出部分不渲染但在统计里明示总数。
+ *
+ * 「来源」视图保留原来的收藏关系图，边由共享实体派生，可点「为何相关」
+ * 懒加载 LLM 解释（计划 §Task3.5），结果缓存后不再重复调用。
  */
 export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
+  const [mode, setMode] = useState<GraphMode>("entity");
   const [graph, setGraph] = useState<KaleidoscopeGraph | null>(null);
+  const [entityGraph, setEntityGraph] = useState<KaleidoscopeEntityGraph | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [library, setLibrary] = useState<LibraryResponse | null>(null);
@@ -37,12 +46,14 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
   const refresh = useCallback(async () => {
     try {
       // 实体侧栏（计划 §Task5.3）需要 mention 与卡片内容，随图一并拉取
-      const [data, lib, mentionList] = await Promise.all([
+      const [data, entityData, lib, mentionList] = await Promise.all([
         getApi().getKaleidoscope(),
+        getApi().getEntityGraph(),
         getApi().getLibrary(),
         getApi().listEntityMentions(),
       ]);
       setGraph(data);
+      setEntityGraph(entityData);
       setLibrary(lib);
       setMentions(mentionList);
     } catch (error) {
@@ -84,23 +95,42 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !graph || graph.nodes.length === 0) return;
+    const active = mode === "entity" ? entityGraph : graph;
+    if (!container || !active || active.nodes.length === 0) return;
+    // 概念图：节点权重取跨来源数——一个概念被多条不同收藏提到，比在同一篇里反复出现更有信息量
+    const elements =
+      mode === "entity" && entityGraph
+        ? [
+            ...entityGraph.nodes.map((node) => ({
+              data: { id: node.entityId, label: node.name, weight: node.sourceCount },
+            })),
+            ...entityGraph.edges.map((edge) => ({
+              data: {
+                id: edge.edgeId,
+                source: edge.aId,
+                target: edge.bId,
+                label: `共现 ${edge.cooccurCount}`,
+                strength: edge.strength,
+              },
+            })),
+          ]
+        : [
+            ...(graph?.nodes ?? []).map((node) => ({
+              data: { id: node.sourceId, label: node.title, weight: node.cardCount },
+            })),
+            ...(graph?.edges ?? []).map((edge) => ({
+              data: {
+                id: edge.edgeId,
+                source: edge.fromSourceId,
+                target: edge.toSourceId,
+                label: edge.relation,
+                strength: edge.strength,
+              },
+            })),
+          ];
     const cy = cytoscape({
       container,
-      elements: [
-        ...graph.nodes.map((node) => ({
-          data: { id: node.sourceId, label: node.title, weight: node.cardCount },
-        })),
-        ...graph.edges.map((edge) => ({
-          data: {
-            id: edge.edgeId,
-            source: edge.fromSourceId,
-            target: edge.toSourceId,
-            label: edge.relation,
-            strength: edge.strength,
-          },
-        })),
-      ],
+      elements,
       style: [
         {
           selector: "node",
@@ -158,7 +188,14 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
       boxSelectionEnabled: false,
     });
     cy.on("tap", "node", (event) => {
-      setSelectedId(String(event.target.id()));
+      const id = String(event.target.id());
+      // 概念图点节点直接进实体侧栏；来源图点节点进来源详情
+      if (mode === "entity") {
+        setSelectedEntityId(id);
+        setSelectedId(null);
+        return;
+      }
+      setSelectedId(id);
       setSelectedEntityId(null);
     });
     cy.on("tap", (event) => {
@@ -167,7 +204,7 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
       setSelectedEntityId(null);
     });
     return () => cy.destroy();
-  }, [graph]);
+  }, [graph, entityGraph, mode]);
 
   const selected: KaleidoscopeNode | null = graph?.nodes.find((node) => node.sourceId === selectedId) ?? null;
 
@@ -237,6 +274,19 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
           }))
       : [];
 
+  /** 概念图被截断时明示总数，避免用户以为看到的是全部（计划 §4）。 */
+  const statsLabel = useMemo(() => {
+    if (mode === "source") {
+      return graph ? `${graph.nodes.length} 个来源 · ${graph.edges.length} 条关联` : "加载中…";
+    }
+    if (!entityGraph) return "加载中…";
+    const shown =
+      entityGraph.totalEntities > entityGraph.nodes.length
+        ? `显示 ${entityGraph.nodes.length} / 共 ${entityGraph.totalEntities} 个概念`
+        : `${entityGraph.nodes.length} 个概念`;
+    return `${shown} · ${entityGraph.edges.length} 条共现`;
+  }, [mode, graph, entityGraph]);
+
   return (
     <section className="page">
       <div className="page-head">
@@ -255,9 +305,28 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
         ) : (
           <>
             <div className="kaleidoscope-toolbar">
-              <span className="kaleidoscope-stats">
-                {graph ? `${graph.nodes.length} 个来源 · ${graph.edges.length} 条关联` : "加载中…"}
-              </span>
+              <div className="mode-tabs" role="tablist" aria-label="图谱视图">
+                {([
+                  { id: "entity" as const, label: "概念" },
+                  { id: "source" as const, label: "来源" },
+                ]).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === item.id}
+                    className={`mode-tab ${mode === item.id ? "active" : ""}`}
+                    onClick={() => {
+                      setMode(item.id);
+                      setSelectedId(null);
+                      setSelectedEntityId(null);
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <span className="kaleidoscope-stats">{statsLabel}</span>
               <div className="kaleidoscope-actions">
                 <button
                   type="button"
@@ -278,9 +347,11 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
               <aside className="kaleidoscope-panel">
                 {selectedEntity ? (
                   <>
-                    <button type="button" className="btn" onClick={() => setSelectedEntityId(null)}>
-                      ← 返回来源
-                    </button>
+                    {mode === "source" && (
+                      <button type="button" className="btn" onClick={() => setSelectedEntityId(null)}>
+                        ← 返回来源
+                      </button>
+                    )}
                     <span className="kaleidoscope-panel-kind">{selectedEntity.entityType}</span>
                     <h2 className="kaleidoscope-panel-title">{selectedEntity.entityName}</h2>
                     <div className="kaleidoscope-mentions">
@@ -369,8 +440,20 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
                   </>
                 ) : (
                   <div className="kaleidoscope-panel-hint">
-                    <strong>点击节点查看来源详情。</strong>
-                    <span>拖拽画布平移，滚轮缩放；孤立的节点说明还没有发现它与其它收藏的实质关联。</span>
+                    {mode === "entity" ? (
+                      <>
+                        <strong>点击概念查看它出现在哪些卡片里。</strong>
+                        <span>
+                          节点大小 = 这个概念被多少条不同收藏提到；连线 = 两个概念出现在同一张卡片。
+                          高频泛化概念不进图，只在来源视图里作为标签保留。
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <strong>点击节点查看来源详情。</strong>
+                        <span>拖拽画布平移，滚轮缩放；孤立的节点说明还没有发现它与其它收藏的实质关联。</span>
+                      </>
+                    )}
                   </div>
                 )}
               </aside>

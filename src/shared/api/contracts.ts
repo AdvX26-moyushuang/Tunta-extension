@@ -237,6 +237,42 @@ export interface KaleidoscopeGraph {
   edges: KaleidoscopeEdge[];
 }
 
+/**
+ * 概念图节点：一个实体。这是万花筒的默认视图——实体是索引、卡片是内容、来源是出处。
+ * hub（出现在 >30% 卡片的泛化实体）不进图，只在侧栏保留为标签。
+ */
+export interface KaleidoscopeEntityNode {
+  entityId: string;
+  name: string;
+  type: string;
+  /** 覆盖卡片数（mentions 主键保证每实体每卡至多一条） */
+  mentionCount: number;
+  /** 跨来源数：一个概念被多少条不同收藏提到，跨源才是知识而不是相似度 */
+  sourceCount: number;
+}
+
+/** 概念图边：实体共现（纯计算，零 LLM）。strength 由 cooccurCount 归一化而来。 */
+export interface KaleidoscopeEntityEdge {
+  edgeId: string;
+  aId: string;
+  bId: string;
+  cooccurCount: number;
+  pmi: number | null;
+  strength: number;
+}
+
+/**
+ * 概念图。nodes 已按 mentionCount 截断到 nodeLimit——
+ * cytoscape 渲染上千节点会糊成毛球，截断是必须的（计划 §4「节点上限」）。
+ */
+export interface KaleidoscopeEntityGraph {
+  nodes: KaleidoscopeEntityNode[];
+  edges: KaleidoscopeEntityEdge[];
+  /** 截断前的非 hub 实体总数，用于告诉用户「这不是全部」 */
+  totalEntities: number;
+  nodeLimit: number;
+}
+
 /** 重建万花筒关系网络的结果统计（实体共现纯计算，零 provider 调用）。 */
 export interface KaleidoscopeRebuildResult {
   sources: number;

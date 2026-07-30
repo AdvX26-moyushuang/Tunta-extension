@@ -9,6 +9,7 @@ import type {
   ConfirmProposalResponse,
   EntityMentionInfo,
   KaleidoscopeEdgeExplanation,
+  KaleidoscopeEntityGraph,
   KaleidoscopeGraph,
   KaleidoscopeRebuildResult,
   LibraryCard,
@@ -60,6 +61,13 @@ function nowIso(): string {
 }
 
 const OPEN_QUERY_PATTERN = /有什么|有没有|推荐|新鲜|最近|随便|看点|啥|值得|interesting|recommend/i;
+
+/**
+ * 概念图节点上限（计划 §4「KaleidoscopePage 需要节点上限」）。
+ * cytoscape 渲染上千节点会糊成毛球且卡死；超出部分按跨来源数截断，
+ * UI 明示「显示 N / 共 M」，避免用户误以为看到的是全部。
+ */
+const ENTITY_GRAPH_NODE_LIMIT = 200;
 
 /** chunk 向量召回：查 embeddings 表拿 chunkId 排名，再回 chunks 表取正文。失败只降级不断检索。 */
 async function searchChunkHits(queryEmbedding: number[], model: string): Promise<ChunkVectorHit[]> {
@@ -398,6 +406,60 @@ export function createLocalApi(): TuntaApi {
           cardCount: cardCountBySource.get(doc.sourceId) ?? 0,
         })),
         edges: edges.filter((edge) => known.has(edge.fromSourceId) && known.has(edge.toSourceId)),
+      };
+    },
+
+    getEntityGraph: async (): Promise<KaleidoscopeEntityGraph> => {
+      const [entities, edges, mentions] = await Promise.all([
+        getStore().listEntities(),
+        getStore().listEntityEdges(),
+        getStore().listMentions(),
+      ]);
+      const byId = new Map(entities.map((entity) => [entity.entityId, entity]));
+      // 软合并：canonicalId 非空的实体不单独成节点，统计归到 canonical 名下
+      const canonical = (entityId: string): string => byId.get(entityId)?.canonicalId ?? entityId;
+
+      const cards = new Map<string, Set<string>>();
+      const sources = new Map<string, Set<string>>();
+      for (const mention of mentions) {
+        const id = canonical(mention.entityId);
+        if (!byId.has(id)) continue;
+        (cards.get(id) ?? cards.set(id, new Set()).get(id)!).add(mention.cardId);
+        (sources.get(id) ?? sources.set(id, new Set()).get(id)!).add(mention.sourceId);
+      }
+
+      // hub（>30% 卡片的泛化实体）不进图：不剔除的话图会退化成星型
+      const candidates = entities
+        .filter((entity) => !entity.isHub && !entity.canonicalId && cards.has(entity.entityId))
+        .map((entity) => ({
+          entityId: entity.entityId,
+          name: entity.name,
+          type: entity.type as string,
+          mentionCount: cards.get(entity.entityId)?.size ?? 0,
+          sourceCount: sources.get(entity.entityId)?.size ?? 0,
+        }))
+        // 跨来源优先：一个概念被多条不同收藏提到，比在同一篇里反复出现更有信息量
+        .sort((a, b) => b.sourceCount - a.sourceCount || b.mentionCount - a.mentionCount);
+
+      const nodes = candidates.slice(0, ENTITY_GRAPH_NODE_LIMIT);
+      const kept = new Set(nodes.map((node) => node.entityId));
+      const visible = edges
+        .map((edge) => ({ ...edge, aId: canonical(edge.aId), bId: canonical(edge.bId) }))
+        .filter((edge) => edge.aId !== edge.bId && kept.has(edge.aId) && kept.has(edge.bId));
+      const maxCooccur = visible.reduce((max, edge) => Math.max(max, edge.cooccurCount), 0);
+
+      return {
+        nodes,
+        edges: visible.map((edge) => ({
+          edgeId: `eedge:${edge.aId}::${edge.bId}`,
+          aId: edge.aId,
+          bId: edge.bId,
+          cooccurCount: edge.cooccurCount,
+          pmi: edge.pmi,
+          strength: maxCooccur > 0 ? edge.cooccurCount / maxCooccur : 0,
+        })),
+        totalEntities: candidates.length,
+        nodeLimit: ENTITY_GRAPH_NODE_LIMIT,
       };
     },
 

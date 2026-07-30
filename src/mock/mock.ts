@@ -18,7 +18,9 @@ import type {
   ChatHistoryEntry,
   ChatTurn,
   ConfirmProposalResponse,
+  EntityMentionInfo,
   KaleidoscopeEdgeExplanation,
+  KaleidoscopeEntityGraph,
   KaleidoscopeGraph,
   KaleidoscopeRebuildResult,
   LibraryCard,
@@ -263,6 +265,25 @@ export function createMockApi(): TuntaApi {
   const chatHistory: { entry: ChatHistoryEntry; turn: ChatTurn }[] = [];
   let captureCounter = 0;
 
+  /**
+   * mock 没有策展流水线，用卡片自带的 domainLabels 当实体，
+   * 再叠一个跨全部卡片的概念，凑出有共现边的最小图。
+   */
+  function mockMentions(): EntityMentionInfo[] {
+    return library.cards.flatMap((card) => {
+      const names = [...card.domainLabels, "注意力循环"];
+      return names.map((name) => ({
+        entityId: `entity:concept:${name}`,
+        entityName: name,
+        entityType: "concept",
+        isHub: false,
+        cardId: card.cardId,
+        sourceId: card.source?.source_id ?? "",
+        blockId: card.evidence[0]?.blockId ?? null,
+      }));
+    });
+  }
+
   function pushChatHistory(query: string, turn: ChatTurn): void {
     chatHistory.unshift({
       entry: {
@@ -372,21 +393,64 @@ export function createMockApi(): TuntaApi {
       return delay({ ...next });
     },
 
-    // mock 无策展流水线：从当前库内卡片合成一个跨来源实体，便于预览侧栏链路
-    listEntityMentions: () =>
-      delay(
-        library.cards.map((card) => ({
-          entityId: "entity:concept:注意力循环",
-          entityName: "注意力循环",
-          entityType: "concept",
-          isHub: false,
-          cardId: card.cardId,
-          sourceId: card.source?.source_id ?? "",
-          blockId: card.evidence[0]?.blockId ?? null,
-        })),
-      ),
+    // mock 无策展流水线：用卡片的 domainLabels 当实体，外加一个跨全部卡片的概念，
+    // 合成出的 mention 集合足以驱动概念图与侧栏的完整链路
+    listEntityMentions: () => delay(mockMentions()),
 
     getKaleidoscope: () => delay(structuredClone(kaleidoscope)),
+
+    getEntityGraph: () => {
+      const mentions = mockMentions();
+      const cards = new Map<string, Set<string>>();
+      const sources = new Map<string, Set<string>>();
+      const names = new Map<string, { name: string; type: string }>();
+      for (const mention of mentions) {
+        names.set(mention.entityId, { name: mention.entityName, type: mention.entityType });
+        (cards.get(mention.entityId) ?? cards.set(mention.entityId, new Set()).get(mention.entityId)!).add(mention.cardId);
+        (sources.get(mention.entityId) ?? sources.set(mention.entityId, new Set()).get(mention.entityId)!).add(mention.sourceId);
+      }
+      const nodes = [...names.entries()]
+        .map(([entityId, meta]) => ({
+          entityId,
+          name: meta.name,
+          type: meta.type,
+          mentionCount: cards.get(entityId)?.size ?? 0,
+          sourceCount: sources.get(entityId)?.size ?? 0,
+        }))
+        .sort((a, b) => b.sourceCount - a.sourceCount || b.mentionCount - a.mentionCount);
+
+      const byCard = new Map<string, string[]>();
+      for (const mention of mentions) {
+        byCard.set(mention.cardId, [...(byCard.get(mention.cardId) ?? []), mention.entityId]);
+      }
+      const cooccur = new Map<string, number>();
+      for (const list of byCard.values()) {
+        const sorted = [...new Set(list)].sort();
+        for (let i = 0; i < sorted.length; i += 1) {
+          for (let j = i + 1; j < sorted.length; j += 1) {
+            const key = `${sorted[i]} ${sorted[j]}`;
+            cooccur.set(key, (cooccur.get(key) ?? 0) + 1);
+          }
+        }
+      }
+      const max = [...cooccur.values()].reduce((acc, value) => Math.max(acc, value), 0);
+      return delay<KaleidoscopeEntityGraph>({
+        nodes,
+        edges: [...cooccur.entries()].map(([key, count]) => {
+          const [aId, bId] = key.split(" ") as [string, string];
+          return {
+            edgeId: `eedge:${aId}::${bId}`,
+            aId,
+            bId,
+            cooccurCount: count,
+            pmi: null,
+            strength: max > 0 ? count / max : 0,
+          };
+        }),
+        totalEntities: nodes.length,
+        nodeLimit: 200,
+      });
+    },
 
     rebuildKaleidoscope: () => {
       // mock 无 LLM：重置回种子图谱并汇报统计
