@@ -4,7 +4,7 @@ export async function ensureOffscreen(): Promise<void> {
   if (existing.length > 0) return;
   await chrome.offscreen.createDocument({
     url: "offscreen.html",
-    reasons: ["WORKERS" as chrome.offscreen.Reason],
-    justification: "本地 SQLite 数据库需要 OPFS 同步访问句柄，只能在 dedicated worker 中获得。",
+    reasons: ["WORKERS", "DOM_PARSER"] as chrome.offscreen.Reason[],
+    justification: "本地 SQLite 需要 OPFS 同步访问句柄（dedicated worker）；正文提取需要 DOMParser 跑 Readability。",
   });
 }

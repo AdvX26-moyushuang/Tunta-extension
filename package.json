@@ -16,6 +16,7 @@
     "icons": "node scripts/gen_ext_icons.mjs"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "@sqlite.org/sqlite-wasm": "3.53.0-build1",
     "comlink": "^4.4.2",
     "cytoscape": "^3.34.0",

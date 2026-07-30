@@ -91,52 +91,8 @@ export interface ParserOutput {
 }
 
 
-export interface ArticleSnapshotBlock {
-  kind: "heading" | "paragraph" | "list_item" | "quote" | "code";
-  text: string;
-}
-
-export type ArticleSnapshotResult =
-  | { ok: true; url: string; title: string; blocks: ArticleSnapshotBlock[] }
-  | { ok: false; code: string; message: string };
-
-export function extractArticleSnapshot(): ArticleSnapshotResult {
-  const url = location.href;
-  const title = (document.title || "").trim() || url;
-  const root =
-    document.querySelector("article") ??
-    document.querySelector("main") ??
-    document.querySelector("[role=main]") ??
-    document.body;
-  const blocks: { kind: "heading" | "paragraph" | "list_item" | "quote" | "code"; text: string }[] = [];
-  const seen = new Set<string>();
-  const push = (kind: (typeof blocks)[number]["kind"], raw: string) => {
-    const text = raw.replace(/\s+/g, " ").trim();
-    if (!text || seen.has(text)) return;
-    seen.add(text);
-    blocks.push({ kind, text: text.slice(0, 2000) });
-  };
-  const nodes = root.querySelectorAll("h1,h2,h3,p,li,blockquote,pre");
-  for (const node of Array.from(nodes)) {
-    const tag = node.tagName.toLowerCase();
-    const text = (node as HTMLElement).innerText ?? "";
-    const isHeading = /^h[123]$/.test(tag);
-    if (!isHeading && text.replace(/\s+/g, " ").trim().length < 30) continue;
-    push(isHeading ? "heading" : tag === "li" ? "list_item" : tag === "blockquote" ? "quote" : tag === "pre" ? "code" : "paragraph", text);
-    if (blocks.length >= 160) break;
-  }
-  if (blocks.length < 3 && document.body) {
-    for (const line of (document.body.innerText ?? "").split(/\n+/)) {
-      const text = line.trim();
-      if (text.length >= 30) push("paragraph", text);
-      if (blocks.length >= 80) break;
-    }
-  }
-  if (blocks.length === 0) {
-    return { ok: false, code: "EXTRACT_EMPTY", message: "未能从页面提取到正文内容。" };
-  }
-  return { ok: true, url, title, blocks };
-}
+// 通用正文提取已换成 Readability（计划 §Task4.1）：页面只抓 outerHTML，
+// 解析在 offscreen 跑，见 src/offscreen/readability.ts。
 
 export interface XiaohongshuSnapshotBlock {
   kind: "heading" | "caption";
