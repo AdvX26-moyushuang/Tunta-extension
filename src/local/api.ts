@@ -364,7 +364,7 @@ export function createLocalApi(): TuntaApi {
         }
         if (queryEmbedding) chunkHits = await searchChunkHits(queryEmbedding, settings.embedding.model);
       }
-      const hits = retrieveHits(cards, ftsHits, chunkHits, topK, queryEmbedding);
+      const hits = retrieveHits(cards, ftsHits, chunkHits, topK, queryEmbedding, settings.retrieval);
       const documents = new Map((await getStore().listDocuments()).map((doc) => [doc.sourceId, doc]));
       return {
         hits: hits.map((hit) => {
@@ -424,7 +424,7 @@ export function createLocalApi(): TuntaApi {
         }
         if (queryEmbedding) chunkHits = await searchChunkHits(queryEmbedding, settings.embedding.model);
       }
-      let hits = retrieveHits(cards, ftsHits, chunkHits, 6, queryEmbedding);
+      let hits = retrieveHits(cards, ftsHits, chunkHits, 6, queryEmbedding, settings.retrieval);
       
       if (cards.length > 0 && (OPEN_QUERY_PATTERN.test(query) || hits.length < 2)) {
         const curated = await selectCardsForOpenQuery(settings, cards, query);

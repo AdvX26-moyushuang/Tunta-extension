@@ -32,12 +32,30 @@ function makeChunkHit(chunkId: string, score: number): ChunkVectorHit {
 
 test("retrieveHits：同分时卡片优先于 chunk（卡片已过质量判断，chunk 只是原文兜底）", () => {
   const card = makeCard("card:a:1");
-  // 卡片只走 FTS rank 0，chunk 只走向量 rank 0：两边 RRF 得分完全相同
-  const hits = retrieveHits([card], [{ cardId: "card:a:1", score: 5 }], [makeChunkHit("chunk:src-a:000", 0.9)], 10, [1, 0]);
+  // 卡片只走 FTS rank 0，chunk 只走向量 rank 0：等权下两边 RRF 得分完全相同
+  const hits = retrieveHits(
+    [card],
+    [{ cardId: "card:a:1", score: 5 }],
+    [makeChunkHit("chunk:src-a:000", 0.9)],
+    10,
+    [1, 0],
+    { vector: 1, fts: 1 },
+  );
   assert.equal(hits.length, 2);
   assert.equal(hits[0].kind, "card");
   assert.equal(hits[1].kind, "chunk");
   assert.equal(hits[0].score, hits[1].score);
+});
+
+test("retrieveHits：默认权重下 FTS 通道按 0.6 加权，同 rank 的纯向量命中得分更高（计划 §Task2.4）", () => {
+  const card = makeCard("card:a:1");
+  // 卡片只走 FTS rank 0（得分 0.6/61），chunk 只走向量 rank 0（得分 1/61）
+  const hits = retrieveHits([card], [{ cardId: "card:a:1", score: 5 }], [makeChunkHit("chunk:src-a:000", 0.9)], 10, [1, 0]);
+  assert.equal(hits.length, 2);
+  assert.equal(hits[0].kind, "chunk");
+  assert.equal(hits[0].score, Number((1 / 61).toFixed(4)));
+  assert.equal(hits[1].kind, "card");
+  assert.equal(hits[1].score, Number((0.6 / 61).toFixed(4)));
 });
 
 test("retrieveHits：chunk 向量命中进入合并，低于 0.05 地板的被过滤", () => {

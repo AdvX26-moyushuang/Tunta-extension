@@ -18,6 +18,14 @@ export interface ChunkVectorHit {
 
 const RRF_K = 60;
 
+/** 各召回通道的 RRF 权重（计划 §Task2.4）：向量语义召回质量高于关键词命中。 */
+export interface RetrievalWeights {
+  vector: number;
+  fts: number;
+}
+
+export const DEFAULT_RETRIEVAL_WEIGHTS: RetrievalWeights = { vector: 1.0, fts: 0.6 };
+
 /** FTS 候选池大小：RRF 只吃前排名，50 条足够覆盖 topK ≤ 8 的合并窗口。 */
 export const FTS_CANDIDATES = 50;
 
@@ -37,7 +45,8 @@ function kindPriority(hit: RetrieveHit): number {
 }
 
 /**
- * RRF 合并两路召回。FTS 那路已下沉到 store（SQLite FTS5 bm25 / JS BM25 退路），
+ * 加权 RRF 合并两路召回：score += weight / (RRF_K + rank + 1)。
+ * FTS 那路已下沉到 store（SQLite FTS5 bm25 / JS BM25 退路），
  * 调用方用 store.searchCardsFts(query, FTS_CANDIDATES) 拿 ftsHits 传入。
  * card 向量暂仍读 card.embedding（存量数据还没回填 embeddings 表）；chunk 向量
  * 来自 embeddings 表，同 model 的余弦分数可与 card 侧直接混成一路排名。
@@ -48,6 +57,7 @@ export function retrieveHits(
   chunkHits: ChunkVectorHit[],
   topK: number,
   queryEmbedding: number[] | null,
+  weights: RetrievalWeights = DEFAULT_RETRIEVAL_WEIGHTS,
 ): RetrieveHit[] {
   const cardById = new Map(cards.map((card) => [card.cardId, card]));
 
@@ -67,19 +77,19 @@ export function retrieveHits(
   vectorRanked.sort((a, b) => b.score - a.score);
 
   const merged = new Map<string, RetrieveHit>();
-  const accumulate = (base: RetrieveHit, rank: number, channel: MatchedBy) => {
+  const accumulate = (base: RetrieveHit, rank: number, channel: MatchedBy, weight: number) => {
     const key = hitKey(base);
     const existing = merged.get(key) ?? base;
-    existing.score += 1 / (RRF_K + rank + 1);
+    existing.score += weight / (RRF_K + rank + 1);
     if (!existing.matchedBy.includes(channel)) existing.matchedBy.push(channel);
     merged.set(key, existing);
   };
   ftsHits.forEach((hit, rank) => {
     const card = cardById.get(hit.cardId);
     if (!card) return; // 防御：FTS 索引与卡片列表瞬时不一致
-    accumulate({ kind: "card", card, score: 0, matchedBy: [] }, rank, "fts");
+    accumulate({ kind: "card", card, score: 0, matchedBy: [] }, rank, "fts", weights.fts);
   });
-  vectorRanked.forEach((entry, rank) => accumulate(entry.base, rank, "vector"));
+  vectorRanked.forEach((entry, rank) => accumulate(entry.base, rank, "vector", weights.vector));
 
   return [...merged.values()]
     .sort((a, b) => b.score - a.score || kindPriority(a) - kindPriority(b))

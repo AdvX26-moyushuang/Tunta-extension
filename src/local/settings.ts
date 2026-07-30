@@ -1,4 +1,5 @@
 import { isExtensionContext } from "@/shared/browser";
+import { DEFAULT_RETRIEVAL_WEIGHTS, type RetrievalWeights } from "./retrieve";
 
 export interface ChatProviderConfig {
   provider: string;
@@ -18,6 +19,8 @@ export interface EmbeddingProviderConfig {
 export interface LocalSettings {
   chat: ChatProviderConfig;
   embedding: EmbeddingProviderConfig;
+  /** 加权 RRF 的通道权重（计划 §Task2.4），存量设置缺失时落默认值。 */
+  retrieval: RetrievalWeights;
 }
 
 const STORAGE_KEY = "tunta:local-settings";
@@ -35,12 +38,14 @@ export const DEFAULT_SETTINGS: LocalSettings = {
     model: "BAAI/bge-m3",
     apiKey: "",
   },
+  retrieval: DEFAULT_RETRIEVAL_WEIGHTS,
 };
 
 function mergeWithDefaults(raw: Partial<LocalSettings> | null | undefined): LocalSettings {
   return {
     chat: { ...DEFAULT_SETTINGS.chat, ...(raw?.chat ?? {}) },
     embedding: { ...DEFAULT_SETTINGS.embedding, ...(raw?.embedding ?? {}) },
+    retrieval: { ...DEFAULT_SETTINGS.retrieval, ...(raw?.retrieval ?? {}) },
   };
 }
 
