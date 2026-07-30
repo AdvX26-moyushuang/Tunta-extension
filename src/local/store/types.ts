@@ -48,6 +48,84 @@ export interface CardEntity {
   type: EntityType;
 }
 
+// ---- 实体表与消歧（计划 §Task3.2） ----
+
+/** canonicalId 非空 = 已被软合并进另一个实体；消歧候选与合并 UI 属后续任务。 */
+export interface StoredEntity {
+  entityId: string;
+  name: string;
+  type: EntityType;
+  canonicalId: string | null;
+  mentionCount: number;
+  createdAt: string;
+}
+
+/** 同时存 cardId 和 blockId 是图谱结构成立的关键：实体到原文一跳可达。 */
+export interface StoredMention {
+  entityId: string;
+  cardId: string;
+  blockId: string | null;
+  sourceId: string;
+}
+
+/** 确定性实体 ID：唯一约束 lower(name)+type 正好就是 ID 本体，PK 冲突 == 唯一约束冲突。 */
+export function stableEntityId(name: string, type: EntityType): string {
+  return `entity:${type}:${name.toLowerCase()}`;
+}
+
+/** 一个 source 的卡片 → 去重实体 + mentions。blockId 指向卡片第一条证据。 */
+export function entityMentionsFromCards(
+  sourceId: string,
+  cards: StoredCard[],
+): { entities: { entityId: string; name: string; type: EntityType }[]; mentions: StoredMention[] } {
+  if (cards.some((card) => card.sourceId !== sourceId)) {
+    throw new Error(`syncEntityMentionsForSource 收到跨 source 卡片：${sourceId}`);
+  }
+  const entities = new Map<string, { entityId: string; name: string; type: EntityType }>();
+  const mentions: StoredMention[] = [];
+  for (const card of cards) {
+    const seen = new Set<string>();
+    for (const entity of card.entities ?? []) {
+      const entityId = stableEntityId(entity.name, entity.type);
+      // 首见大小写胜出，与 SQL 的 ON CONFLICT DO NOTHING 语义对齐
+      if (!entities.has(entityId)) entities.set(entityId, { entityId, name: entity.name, type: entity.type });
+      if (seen.has(entityId)) continue;
+      seen.add(entityId);
+      mentions.push({ entityId, cardId: card.cardId, blockId: card.evidence[0]?.blockId ?? null, sourceId });
+    }
+  }
+  return { entities: [...entities.values()], mentions };
+}
+
+/**
+ * MemoryStore / IdbStore 的 syncEntityMentionsForSource 共用实现：
+ * upsert 实体（已存在的保持首见 name / createdAt / canonicalId）、
+ * 删本 source 旧 mentions、插新、mention_count 全量重算（小库不做增量记账）。
+ */
+export function syncEntityState(
+  entities: StoredEntity[],
+  mentions: StoredMention[],
+  sourceId: string,
+  cards: StoredCard[],
+  now: string,
+): { entities: StoredEntity[]; mentions: StoredMention[] } {
+  const incoming = entityMentionsFromCards(sourceId, cards);
+  const byId = new Map(entities.map((entity) => [entity.entityId, entity]));
+  for (const entity of incoming.entities) {
+    if (!byId.has(entity.entityId)) {
+      byId.set(entity.entityId, { ...entity, canonicalId: null, mentionCount: 0, createdAt: now });
+    }
+  }
+  const nextMentions = [...mentions.filter((mention) => mention.sourceId !== sourceId), ...incoming.mentions];
+  const counts = new Map<string, number>();
+  for (const mention of nextMentions) counts.set(mention.entityId, (counts.get(mention.entityId) ?? 0) + 1);
+  const nextEntities = [...byId.values()].map((entity) => ({
+    ...entity,
+    mentionCount: counts.get(entity.entityId) ?? 0,
+  }));
+  return { entities: nextEntities, mentions: nextMentions };
+}
+
 export interface StoredChatTurn {
   queryId: string;
   query: string;
@@ -211,6 +289,13 @@ export interface TuntaStore {
   getChatTurnRecord(queryId: string): Promise<StoredChatTurn | undefined>;
   listChatTurns(): Promise<StoredChatTurn[]>;
   pruneChatTurns(keep?: number): Promise<void>;
+
+  // entities / mentions（计划 §Task3.2）
+  /** 策展落卡后调用：与 replaceCardsForSource 同一批卡片，保证 mentions 与新卡对齐。 */
+  syncEntityMentionsForSource(sourceId: string, cards: StoredCard[]): Promise<void>;
+  listEntities(): Promise<StoredEntity[]>;
+  /** 全量返回：n 小，Task3.3 的共现边直接在内存里算。 */
+  listMentions(): Promise<StoredMention[]>;
 
   // kaleidoscope edges
   putKaleidoscopeEdges(edges: StoredKaleidoscopeEdge[]): Promise<void>;

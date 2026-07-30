@@ -5,6 +5,7 @@ import {
   rankEmbeddings,
   searchCardsByBm25,
   summarizeEmbeddingModels,
+  syncEntityState,
   type CardFtsHit,
   type EmbeddingHit,
   type EmbeddingModelInfo,
@@ -14,12 +15,14 @@ import {
   type StoredChunk,
   type StoredDocument,
   type StoredEmbedding,
+  type StoredEntity,
   type StoredKaleidoscopeEdge,
+  type StoredMention,
   type TuntaStore,
 } from "./types";
 
 const DB_NAME = "tunta-local";
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -55,6 +58,13 @@ function openDb(): Promise<IDBDatabase> {
           const chunks = db.createObjectStore("chunks", { keyPath: "chunkId" });
           chunks.createIndex("sourceId", "sourceId", { unique: false });
         }
+        if (!db.objectStoreNames.contains("entities")) {
+          db.createObjectStore("entities", { keyPath: "entityId" });
+        }
+        if (!db.objectStoreNames.contains("mentions")) {
+          // 与 SQL 主键 (entity_id, card_id) 对齐
+          db.createObjectStore("mentions", { keyPath: ["entityId", "cardId"] });
+        }
         const cards = request.transaction?.objectStore("cards");
         if (cards) {
           const seenCards = new Set<string>();
@@ -87,7 +97,7 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges" | "embeddings" | "chunks";
+type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges" | "embeddings" | "chunks" | "entities" | "mentions";
 
 async function withStore<T>(store: StoreName, mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const db = await openDb();
@@ -321,6 +331,40 @@ export class IdbStore implements TuntaStore {
     });
   }
 
+  // entities / mentions（计划 §Task3.2）：n 小，每次同步全量重写两张表
+
+  async syncEntityMentionsForSource(sourceId: string, cards: StoredCard[]): Promise<void> {
+    const next = syncEntityState(
+      await getAll<StoredEntity>("entities"),
+      await getAll<StoredMention>("mentions"),
+      sourceId,
+      cards,
+      new Date().toISOString(),
+    );
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["entities", "mentions"], "readwrite");
+      const entities = tx.objectStore("entities");
+      const mentions = tx.objectStore("mentions");
+      entities.clear();
+      mentions.clear();
+      for (const entity of next.entities) entities.put(entity);
+      for (const mention of next.mentions) mentions.put(mention);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("IDB entities/mentions sync failed"));
+    });
+  }
+
+  async listEntities(): Promise<StoredEntity[]> {
+    return (await getAll<StoredEntity>("entities")).sort((a, b) => a.entityId.localeCompare(b.entityId));
+  }
+
+  async listMentions(): Promise<StoredMention[]> {
+    return (await getAll<StoredMention>("mentions")).sort(
+      (a, b) => a.entityId.localeCompare(b.entityId) || a.cardId.localeCompare(b.cardId),
+    );
+  }
+
   // kaleidoscope edges
 
   async putKaleidoscopeEdges(edges: StoredKaleidoscopeEdge[]): Promise<void> {
@@ -367,7 +411,7 @@ export class IdbStore implements TuntaStore {
   async clearAllLocalData(): Promise<void> {
     const db = await openDb();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges", "embeddings", "chunks"], "readwrite");
+      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges", "embeddings", "chunks", "entities", "mentions"], "readwrite");
       tx.objectStore("captures").clear();
       tx.objectStore("documents").clear();
       tx.objectStore("cards").clear();
@@ -375,6 +419,8 @@ export class IdbStore implements TuntaStore {
       tx.objectStore("kaleidoscope_edges").clear();
       tx.objectStore("embeddings").clear();
       tx.objectStore("chunks").clear();
+      tx.objectStore("entities").clear();
+      tx.objectStore("mentions").clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error ?? new Error("IDB clearAll failed"));
     });

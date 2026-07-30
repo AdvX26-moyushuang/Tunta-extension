@@ -2,6 +2,7 @@ import { l2Normalize, dotProduct, tokenize } from "../text.js";
 import {
   CHAT_HISTORY_LIMIT,
   cardFtsText,
+  entityMentionsFromCards,
   type CardFtsHit,
   type EmbeddingHit,
   type EmbeddingModelInfo,
@@ -11,7 +12,9 @@ import {
   type StoredChunk,
   type StoredDocument,
   type StoredEmbedding,
+  type StoredEntity,
   type StoredKaleidoscopeEdge,
+  type StoredMention,
   type TuntaStore,
 } from "./types.js";
 
@@ -26,7 +29,7 @@ export interface SqlDriver {
   query(sql: string, params?: SqlValue[]): Promise<Record<string, unknown>[]>;
 }
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /** 计划 §Task1.3 的三张表 + TuntaStore 需要的 chat_history / kaleidoscope_edges。 */
 const SCHEMA_V1 = `
@@ -117,6 +120,33 @@ CREATE TABLE chunks (
 CREATE INDEX idx_chunks_source ON chunks(source_id);
 `;
 
+/**
+ * 实体表与提及（计划 §Task3.2）。mentions 同时存 card_id 和 block_id：实体到原文一跳可达。
+ * ON DELETE CASCADE 必须：replaceCardsForSource 删卡重建时 mentions 跟着清。
+ * canonical_id 非空 = 已被软合并；候选生成与用户确认 UI 属后续任务，不自动合并。
+ */
+const SCHEMA_V8 = `
+CREATE TABLE entities (
+  entity_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  canonical_id TEXT REFERENCES entities(entity_id),
+  mention_count INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_entities_name_type ON entities(lower(name), type);
+
+CREATE TABLE mentions (
+  entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+  card_id   TEXT NOT NULL REFERENCES cards(card_id) ON DELETE CASCADE,
+  block_id  TEXT,
+  source_id TEXT NOT NULL,
+  PRIMARY KEY (entity_id, card_id)
+);
+CREATE INDEX idx_mentions_card ON mentions(card_id);
+CREATE INDEX idx_mentions_source ON mentions(source_id);
+`;
+
 const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)> = {
   1: SCHEMA_V1,
   2: SCHEMA_V2,
@@ -126,6 +156,7 @@ const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)
   6: migrateV6,
   /** 实体随卡持久化（计划 §Task3.1）：存量行保持 NULL，重跑策展后才有值。 */
   7: "ALTER TABLE cards ADD COLUMN entities TEXT",
+  8: SCHEMA_V8,
 };
 
 /**
@@ -309,6 +340,26 @@ function rowToChunk(row: Row): StoredChunk {
     text: row.text as string,
     blockIds: parse<string[]>(row.block_ids) ?? [],
     createdAt: row.created_at as string,
+  };
+}
+
+function rowToEntity(row: Row): StoredEntity {
+  return {
+    entityId: row.entity_id as string,
+    name: row.name as string,
+    type: row.type as StoredEntity["type"],
+    canonicalId: (row.canonical_id as string | null) ?? null,
+    mentionCount: Number(row.mention_count),
+    createdAt: row.created_at as string,
+  };
+}
+
+function rowToMention(row: Row): StoredMention {
+  return {
+    entityId: row.entity_id as string,
+    cardId: row.card_id as string,
+    blockId: (row.block_id as string | null) ?? null,
+    sourceId: row.source_id as string,
   };
 }
 
@@ -614,6 +665,41 @@ export class SqlCore implements TuntaStore {
     );
   }
 
+  // entities / mentions（计划 §Task3.2）
+
+  async syncEntityMentionsForSource(sourceId: string, cards: StoredCard[]): Promise<void> {
+    const incoming = entityMentionsFromCards(sourceId, cards);
+    const now = new Date().toISOString();
+    await this.inTransaction(async () => {
+      for (const entity of incoming.entities) {
+        // 已存在的实体保持首见大小写与 createdAt；lower(name)+type 唯一约束 == entity_id 本体
+        await this.driver.exec(
+          "INSERT INTO entities (entity_id, name, type, canonical_id, mention_count, created_at) VALUES (?, ?, ?, NULL, 0, ?) ON CONFLICT DO NOTHING",
+          [entity.entityId, entity.name, entity.type, now],
+        );
+      }
+      await this.driver.exec("DELETE FROM mentions WHERE source_id = ?", [sourceId]);
+      for (const mention of incoming.mentions) {
+        await this.driver.exec(
+          "INSERT INTO mentions (entity_id, card_id, block_id, source_id) VALUES (?, ?, ?, ?)",
+          [mention.entityId, mention.cardId, mention.blockId, mention.sourceId],
+        );
+      }
+      // mention_count 全量重算：小库不做增量记账，也顺便修正级联删卡留下的旧计数
+      await this.driver.exec(
+        "UPDATE entities SET mention_count = (SELECT COUNT(*) FROM mentions WHERE mentions.entity_id = entities.entity_id)",
+      );
+    });
+  }
+
+  async listEntities(): Promise<StoredEntity[]> {
+    return (await this.rows("SELECT * FROM entities ORDER BY entity_id")).map(rowToEntity);
+  }
+
+  async listMentions(): Promise<StoredMention[]> {
+    return (await this.rows("SELECT * FROM mentions ORDER BY entity_id, card_id")).map(rowToMention);
+  }
+
   // kaleidoscope edges
 
   async putKaleidoscopeEdges(edges: StoredKaleidoscopeEdge[]): Promise<void> {
@@ -649,6 +735,10 @@ export class SqlCore implements TuntaStore {
   async clearAllLocalData(): Promise<void> {
     await this.inTransaction(async () => {
       await this.driver.exec("DELETE FROM cards_fts");
+      await this.driver.exec("DELETE FROM mentions");
+      // 先删被合并方（canonical_id 非空的子行）再全删：自引用外键无 ON DELETE 动作
+      await this.driver.exec("DELETE FROM entities WHERE canonical_id IS NOT NULL");
+      await this.driver.exec("DELETE FROM entities");
       await this.driver.exec("DELETE FROM embeddings");
       await this.driver.exec("DELETE FROM chunks");
       await this.driver.exec("DELETE FROM cards");

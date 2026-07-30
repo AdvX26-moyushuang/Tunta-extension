@@ -5,6 +5,7 @@ import {
   rankEmbeddings,
   searchCardsByBm25,
   summarizeEmbeddingModels,
+  syncEntityState,
   type CardFtsHit,
   type EmbeddingHit,
   type EmbeddingModelInfo,
@@ -14,7 +15,9 @@ import {
   type StoredChunk,
   type StoredDocument,
   type StoredEmbedding,
+  type StoredEntity,
   type StoredKaleidoscopeEdge,
+  type StoredMention,
   type TuntaStore,
 } from "./types.js";
 
@@ -35,6 +38,8 @@ export class MemoryStore implements TuntaStore {
   private kaleidoscopeEdges = new Map<string, StoredKaleidoscopeEdge>();
   private embeddings = new Map<string, StoredEmbedding>();
   private chunks = new Map<string, StoredChunk>();
+  private entities = new Map<string, StoredEntity>();
+  private mentions: StoredMention[] = [];
 
   // captures
 
@@ -186,6 +191,24 @@ export class MemoryStore implements TuntaStore {
     }
   }
 
+  // entities / mentions（计划 §Task3.2）
+
+  async syncEntityMentionsForSource(sourceId: string, cards: StoredCard[]): Promise<void> {
+    const next = syncEntityState([...this.entities.values()], this.mentions, sourceId, cards, new Date().toISOString());
+    this.entities = new Map(next.entities.map((entity) => [entity.entityId, clone(entity)]));
+    this.mentions = next.mentions.map(clone);
+  }
+
+  async listEntities(): Promise<StoredEntity[]> {
+    return [...this.entities.values()].map(clone).sort((a, b) => a.entityId.localeCompare(b.entityId));
+  }
+
+  async listMentions(): Promise<StoredMention[]> {
+    return this.mentions
+      .map(clone)
+      .sort((a, b) => a.entityId.localeCompare(b.entityId) || a.cardId.localeCompare(b.cardId));
+  }
+
   // kaleidoscope edges
 
   async putKaleidoscopeEdges(edges: StoredKaleidoscopeEdge[]): Promise<void> {
@@ -216,5 +239,7 @@ export class MemoryStore implements TuntaStore {
     this.kaleidoscopeEdges.clear();
     this.embeddings.clear();
     this.chunks.clear();
+    this.entities.clear();
+    this.mentions = [];
   }
 }

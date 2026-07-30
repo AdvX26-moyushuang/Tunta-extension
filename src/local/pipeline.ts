@@ -264,6 +264,8 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
       capture = await save({ ...capture, status: "parsing" });
       const curation = await generateCardsForDocument(settings, doc);
       await getStore().replaceCardsForSource(doc.sourceId, curation.cards);
+      // 实体与提及随卡同步（计划 §Task3.2）：策展重跑后 mentions 与新卡对齐
+      await getStore().syncEntityMentionsForSource(doc.sourceId, curation.cards);
       
       if (curation.source.title || curation.source.summary) {
         await getStore().putDocument({

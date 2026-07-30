@@ -444,11 +444,81 @@ for (const impl of implementations) {
     assert.deepEqual(await store.listEmbeddedOwnerIds("chunk", "legacy-model"), []);
   });
 
-  test(`[${impl.name}] clearAllLocalData：七张表全部清空`, async () => {
+  test(`[${impl.name}] entities/mentions：同步、大小写消歧与重策展清理`, async () => {
+    const store = impl.create();
+    await store.putDocument(makeDocument("src-a"));
+    await store.putDocument(makeDocument("src-b"));
+    const cardsA = [
+      makeCard({
+        cardId: "card:a:1",
+        sourceId: "src-a",
+        evidence: [{ blockId: "block:paragraph:001", quote: null }],
+        entities: [
+          { name: "Anthropic", type: "org" as const },
+          { name: "约束", type: "concept" as const },
+        ],
+      }),
+      makeCard({ cardId: "card:a:2", sourceId: "src-a", entities: [{ name: "anthropic", type: "org" as const }] }),
+    ];
+    await store.putCards(cardsA);
+    await store.syncEntityMentionsForSource("src-a", cardsA);
+
+    const cardsB = [
+      makeCard({ cardId: "card:b:1", sourceId: "src-b", entities: [{ name: "ANTHROPIC", type: "org" as const }] }),
+    ];
+    await store.putCards(cardsB);
+    await store.syncEntityMentionsForSource("src-b", cardsB);
+
+    // 同名实体（大小写不同）只有一行，保留首见大小写；mention_count 跨 source 累计
+    const entities = await store.listEntities();
+    assert.deepEqual(
+      entities.map((entity) => [entity.entityId, entity.name, entity.mentionCount]),
+      [
+        ["entity:concept:约束", "约束", 1],
+        ["entity:org:anthropic", "Anthropic", 3],
+      ],
+    );
+    assert.ok(entities.every((entity) => entity.canonicalId === null));
+
+    // mention 同时带 cardId 与 blockId：实体到原文一跳可达；无证据的卡 blockId 落 null
+    const mentions = await store.listMentions();
+    assert.equal(mentions.length, 4);
+    assert.deepEqual(
+      mentions.find((m) => m.cardId === "card:a:1" && m.entityId === "entity:org:anthropic"),
+      { entityId: "entity:org:anthropic", cardId: "card:a:1", blockId: "block:paragraph:001", sourceId: "src-a" },
+    );
+    assert.equal(mentions.find((m) => m.cardId === "card:a:2")?.blockId, null);
+
+    // 策展重跑：本 source 旧 mentions 清掉，其他 source 不动；mention_count 重算
+    const replaced = [
+      makeCard({ cardId: "card:a:9", sourceId: "src-a", entities: [{ name: "约束", type: "concept" as const }] }),
+    ];
+    await store.replaceCardsForSource("src-a", replaced);
+    await store.syncEntityMentionsForSource("src-a", replaced);
+    assert.deepEqual(
+      (await store.listEntities()).map((entity) => [entity.entityId, entity.mentionCount]),
+      [
+        ["entity:concept:约束", 1],
+        ["entity:org:anthropic", 1],
+      ],
+    );
+    assert.deepEqual((await store.listMentions()).map((m) => m.cardId).sort(), ["card:a:9", "card:b:1"]);
+
+    // 跨 source 卡片直接报错
+    await assert.rejects(
+      store.syncEntityMentionsForSource("src-a", [makeCard({ cardId: "card:b:9", sourceId: "src-b" })]),
+      /跨 source/,
+    );
+  });
+
+  test(`[${impl.name}] clearAllLocalData：九张表全部清空`, async () => {
     const store = impl.create();
     await store.putCapture(makeCapture({ captureId: "c1", url: "https://a.com" }));
     await store.putDocument(makeDocument("src-1"));
-    await store.putCards([makeCard({ cardId: "card:1", sourceId: "src-1" })]);
+    await store.putCards([
+      makeCard({ cardId: "card:1", sourceId: "src-1", entities: [{ name: "约束", type: "concept" as const }] }),
+    ]);
+    await store.syncEntityMentionsForSource("src-1", await store.listCardsBySource("src-1"));
     await store.putChatTurn(makeChatTurn("q1", "2026-01-01T00:00:00.000Z"));
     await store.putKaleidoscopeEdges([makeEdge("s1", "s2")]);
     await store.putEmbeddings([makeEmbedding({ ownerId: "card:1", vector: [1, 0] })]);
@@ -463,6 +533,8 @@ for (const impl of implementations) {
     assert.deepEqual(await store.searchCardsFts("标题", 10), []);
     assert.deepEqual(await store.listEmbeddingModels(), []);
     assert.deepEqual(await store.listChunksBySource("src-1"), []);
+    assert.deepEqual(await store.listEntities(), []);
+    assert.deepEqual(await store.listMentions(), []);
   });
 }
 
@@ -516,6 +588,8 @@ test("captures：V5 升级到 V6 时从 Parser Output 补回结构化告警", as
       status: "done",
     }),
   );
+  await driver.exec("DROP TABLE mentions");
+  await driver.exec("DROP TABLE entities");
   await driver.exec("ALTER TABLE captures DROP COLUMN parse_warnings");
   await driver.exec("ALTER TABLE cards DROP COLUMN entities");
   await driver.exec("PRAGMA user_version = 5");
@@ -542,6 +616,8 @@ test("cards_fts：V2 库升级到 V3 时存量卡片可检索", async () => {
   await driver.exec("DROP TABLE cards_fts");
   await driver.exec("DROP TABLE embeddings");
   await driver.exec("DROP TABLE chunks");
+  await driver.exec("DROP TABLE mentions");
+  await driver.exec("DROP TABLE entities");
   await driver.exec("ALTER TABLE captures DROP COLUMN parse_warnings");
   await driver.exec("ALTER TABLE cards DROP COLUMN entities");
   await driver.exec("PRAGMA user_version = 2");

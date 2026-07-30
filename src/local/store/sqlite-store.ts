@@ -10,7 +10,9 @@ import type {
   StoredChunk,
   StoredDocument,
   StoredEmbedding,
+  StoredEntity,
   StoredKaleidoscopeEdge,
+  StoredMention,
   TuntaStore,
 } from "./types";
 
@@ -123,6 +125,18 @@ export class SqliteStore implements TuntaStore {
 
   pruneChatTurns(keep?: number): Promise<void> {
     return call("pruneChatTurns", keep === undefined ? [] : [keep]);
+  }
+
+  syncEntityMentionsForSource(sourceId: string, cards: StoredCard[]): Promise<void> {
+    return call("syncEntityMentionsForSource", [sourceId, cards]);
+  }
+
+  listEntities(): Promise<StoredEntity[]> {
+    return call("listEntities", []);
+  }
+
+  listMentions(): Promise<StoredMention[]> {
+    return call("listMentions", []);
   }
 
   putKaleidoscopeEdges(edges: StoredKaleidoscopeEdge[]): Promise<void> {
