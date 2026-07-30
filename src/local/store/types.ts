@@ -30,8 +30,22 @@ export interface StoredCard {
   body: string;
   domainLabels: string[];
   evidence: { blockId: string; quote: string | null }[];
+  /** 策展时随卡抽取的实体（计划 §Task3.1）；存量卡片缺失此字段，消费方用 ?? []。 */
+  entities?: CardEntity[];
   embedding: number[] | null;
   createdAt: string;
+}
+
+// ---- 实体（计划 §Task3.1） ----
+
+/** 实体类型限死六个值，越界的在抽取清洗阶段丢弃。 */
+export const ENTITY_TYPES = ["person", "concept", "tool", "method", "work", "org"] as const;
+
+export type EntityType = (typeof ENTITY_TYPES)[number];
+
+export interface CardEntity {
+  name: string;
+  type: EntityType;
 }
 
 export interface StoredChatTurn {

@@ -26,7 +26,7 @@ export interface SqlDriver {
   query(sql: string, params?: SqlValue[]): Promise<Record<string, unknown>[]>;
 }
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /** 计划 §Task1.3 的三张表 + TuntaStore 需要的 chat_history / kaleidoscope_edges。 */
 const SCHEMA_V1 = `
@@ -124,6 +124,8 @@ const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)
   4: SCHEMA_V4,
   5: SCHEMA_V5,
   6: migrateV6,
+  /** 实体随卡持久化（计划 §Task3.1）：存量行保持 NULL，重跑策展后才有值。 */
+  7: "ALTER TABLE cards ADD COLUMN entities TEXT",
 };
 
 /**
@@ -264,7 +266,7 @@ function rowToDocument(row: Row): StoredDocument {
 }
 
 function rowToCard(row: Row): StoredCard {
-  return {
+  const card: StoredCard = {
     cardId: row.card_id as string,
     sourceId: row.source_id as string,
     cardType: row.card_type as StoredCard["cardType"],
@@ -275,6 +277,9 @@ function rowToCard(row: Row): StoredCard {
     embedding: parse<number[]>(row.embedding) ?? null,
     createdAt: row.created_at as string,
   };
+  const entities = parse<StoredCard["entities"]>(row.entities);
+  if (entities !== undefined) card.entities = entities;
+  return card;
 }
 
 function rowToChatTurn(row: Row): StoredChatTurn {
@@ -330,12 +335,12 @@ ON CONFLICT(source_id) DO UPDATE SET
 `;
 
 const CARD_UPSERT = `
-INSERT INTO cards (card_id, source_id, card_type, title, body, domain_labels, evidence, embedding, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO cards (card_id, source_id, card_type, title, body, domain_labels, evidence, entities, embedding, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(card_id) DO UPDATE SET
   source_id = excluded.source_id, card_type = excluded.card_type, title = excluded.title,
   body = excluded.body, domain_labels = excluded.domain_labels, evidence = excluded.evidence,
-  embedding = excluded.embedding, created_at = excluded.created_at
+  entities = excluded.entities, embedding = excluded.embedding, created_at = excluded.created_at
 `;
 
 function captureParams(capture: StoredCapture): SqlValue[] {
@@ -350,7 +355,7 @@ function captureParams(capture: StoredCapture): SqlValue[] {
 function cardParams(card: StoredCard): SqlValue[] {
   return [
     card.cardId, card.sourceId, card.cardType ?? null, card.title ?? null, card.body ?? null,
-    json(card.domainLabels), json(card.evidence), json(card.embedding), card.createdAt,
+    json(card.domainLabels), json(card.evidence), json(card.entities), json(card.embedding), card.createdAt,
   ];
 }
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { MemoryStore } from "./memory-store.js";
-import { SqlCore, type SqlDriver } from "./sql-core.js";
+import { SqlCore, SCHEMA_VERSION, type SqlDriver } from "./sql-core.js";
 import type {
   StoredCapture,
   StoredCard,
@@ -223,9 +223,20 @@ for (const impl of implementations) {
     assert.equal((await store.listCardsBySource("src-b")).length, 1);
     assert.equal((await store.listCardsBySource("src-none")).length, 0);
 
-    await store.putCard(makeCard({ cardId: "card:a:1", sourceId: "src-a", title: "更新后" }));
+    await store.putCard(
+      makeCard({
+        cardId: "card:a:1",
+        sourceId: "src-a",
+        title: "更新后",
+        entities: [{ name: "约束", type: "concept" }],
+      }),
+    );
     const updated = (await store.listCardsBySource("src-a")).find((card) => card.cardId === "card:a:1");
     assert.equal(updated?.title, "更新后");
+    // entities 随卡持久化（计划 §Task3.1）；未写入的存量卡保持 undefined
+    assert.deepEqual(updated?.entities, [{ name: "约束", type: "concept" }]);
+    const untouched = (await store.listCardsBySource("src-a")).find((card) => card.cardId === "card:a:2");
+    assert.equal(untouched?.entities, undefined);
   });
 
   test(`[${impl.name}] replaceCardsForSource：只替换本 source，跨 source 报错`, async () => {
@@ -480,7 +491,7 @@ test("card_states：策展重跑（replaceCardsForSource）不影响用户状态
   assert.equal(Number(states[0].starred), 1);
 
   const versionRows = await driver.query("PRAGMA user_version");
-  assert.equal(Number(versionRows[0]?.user_version), 6);
+  assert.equal(Number(versionRows[0]?.user_version), SCHEMA_VERSION);
 });
 
 test("captures：V5 升级到 V6 时从 Parser Output 补回结构化告警", async () => {
@@ -506,6 +517,7 @@ test("captures：V5 升级到 V6 时从 Parser Output 补回结构化告警", as
     }),
   );
   await driver.exec("ALTER TABLE captures DROP COLUMN parse_warnings");
+  await driver.exec("ALTER TABLE cards DROP COLUMN entities");
   await driver.exec("PRAGMA user_version = 5");
 
   const upgraded = new SqlCore(driver);
@@ -531,6 +543,7 @@ test("cards_fts：V2 库升级到 V3 时存量卡片可检索", async () => {
   await driver.exec("DROP TABLE embeddings");
   await driver.exec("DROP TABLE chunks");
   await driver.exec("ALTER TABLE captures DROP COLUMN parse_warnings");
+  await driver.exec("ALTER TABLE cards DROP COLUMN entities");
   await driver.exec("PRAGMA user_version = 2");
 
   // 重新初始化：migrateV3 建表并回填存量卡片，V4/V5 补齐 embeddings / chunks 表

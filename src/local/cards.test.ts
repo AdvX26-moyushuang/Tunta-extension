@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { deduplicateCards, type CardWithoutId } from "./card-normalize.js";
+import { toValidEntities } from "./cards.js";
 
 function generated(title: string, body: string): CardWithoutId {
   return {
@@ -51,4 +52,32 @@ test("re-curation keeps card ids stable when content is unchanged", async () => 
   for (const card of second.cards) {
     assert.equal(card.cardId, firstIds.get(card.title));
   }
+});
+
+test("toValidEntities：type 限死六个值、lower(name)+type 去重、每卡最多 5 个（计划 §Task3.1）", () => {
+  // 非法 type / 空 name / 超长 name 丢弃，大小写视为同一实体
+  assert.deepEqual(
+    toValidEntities([
+      { name: "约束", type: "concept" },
+      { name: "Claude", type: "tool" },
+      { name: "claude", type: "tool" }, // 大小写重复
+      { name: "约束", type: "alien" }, // 越界 type
+      { name: "", type: "person" }, // 空 name
+      { name: "x".repeat(41), type: "person" }, // 超长 name
+    ]),
+    [
+      { name: "约束", type: "concept" },
+      { name: "Claude", type: "tool" },
+    ],
+  );
+
+  // 非数组输入不抛错，落空数组
+  assert.deepEqual(toValidEntities(undefined), []);
+  assert.deepEqual(toValidEntities("entities"), []);
+
+  // 同 type 不同 name 不算重复；超出 5 个截断
+  const many = toValidEntities(
+    ["a", "b", "c", "d", "e", "f", "g"].map((name) => ({ name, type: "concept" })),
+  );
+  assert.equal(many.length, 5);
 });
