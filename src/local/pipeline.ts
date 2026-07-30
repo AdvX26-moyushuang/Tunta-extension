@@ -11,6 +11,7 @@ import { buildParserOutput, isXiaohongshuUrl, toCaptureParseWarnings } from "./p
 import { callEmbedding, ProviderError } from "./provider";
 import { isEmbeddingConfigured, loadSettings, type LocalSettings } from "./settings";
 import { expandListCaptures } from "./expand";
+import { isPdfUrl } from "./adapters/pdf";
 import { executeSnapshotOnTab, SnapshotError, type SnapshotData } from "./snapshot";
 
 const TAB_LOAD_TIMEOUT_MS = 45_000;
@@ -63,6 +64,10 @@ async function snapshotForUrl(url: string, tabId?: number): Promise<SnapshotData
       "小红书 local 抓取不打开隐藏后台页：请在目标笔记页点击插件主动收藏。",
       true,
     );
+  }
+  // PDF 由扩展直接 fetch 字节（pdfAdapter 不依赖 tabId），不用白开一个后台 tab
+  if (tabId == null && isPdfUrl(url)) {
+    return executeSnapshotOnTab(-1, url);
   }
   let targetTabId = tabId ?? null;
   let created = false;

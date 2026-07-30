@@ -12,9 +12,15 @@ import {
   type DbRpcRequest,
   type DbRpcResponse,
 } from "@/shared/db-rpc";
-import { PARSE_RPC_TARGET, type ArticleParseRequest, type ArticleParseResponse } from "@/shared/parse-rpc";
+import {
+  PARSE_RPC_TARGET,
+  type ArticleParseResponse,
+  type ParseRpcRequest,
+  type PdfParseResponse,
+} from "@/shared/parse-rpc";
 import type { DbWorkerHost } from "./db-worker";
 import { parseArticleHtml } from "./readability";
+import { parsePdf } from "./pdf";
 
 const worker = new Worker(new URL("./db-worker.ts", import.meta.url), { type: "module" });
 worker.addEventListener("error", (event) => {
@@ -28,7 +34,7 @@ const storeRemote = remote.store as unknown as Record<DbMethod, (...args: unknow
 // SW → offscreen 走 chrome.runtime 消息（MessagePort 传不过扩展消息通道），
 // offscreen → worker 走 Comlink。每个 TuntaStore 方法一次往返。
 chrome.runtime.onMessage.addListener(
-  (raw: DbRpcRequest | DbAdminRequest | ArticleParseRequest, _sender, sendResponse: (r: DbRpcResponse | ArticleParseResponse) => void) => {
+  (raw: DbRpcRequest | DbAdminRequest | ParseRpcRequest, _sender, sendResponse: (r: DbRpcResponse | ArticleParseResponse | PdfParseResponse) => void) => {
     if (raw?.target === DB_RPC_TARGET) {
       void (async () => {
         try {
@@ -58,13 +64,19 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
-    // 正文解析（计划 §Task4.1）：SW 没有 DOMParser，Readability 集中在这里跑，同步返回即可
+    // 正文/PDF 解析（计划 §Task4.1/4.2）：SW 没有 DOMParser，Readability/pdfjs 集中在这里跑
     if (raw?.target === PARSE_RPC_TARGET) {
-      try {
-        sendResponse({ ok: true, value: parseArticleHtml(raw.html, raw.url) });
-      } catch (cause) {
-        sendResponse({ ok: false, error: cause instanceof Error ? cause.message : String(cause) });
-      }
+      void (async () => {
+        try {
+          if (raw.op === "pdf") {
+            sendResponse({ ok: true, value: await parsePdf(raw.data) });
+          } else {
+            sendResponse({ ok: true, value: parseArticleHtml(raw.html, raw.url) });
+          }
+        } catch (cause) {
+          sendResponse({ ok: false, error: cause instanceof Error ? cause.message : String(cause) });
+        }
+      })();
       return true;
     }
 

@@ -30,3 +30,33 @@ export interface ArticleParseResult {
 export type ArticleParseResponse =
   | { ok: true; value: ArticleParseResult }
   | { ok: false; error: string };
+
+// ---- PDF（计划 §Task4.2）----
+// Chrome 内置 PDF 查看器是插件，executeScript 拿不到内容；
+// 扩展 fetch 原始字节后以 base64 传给 offscreen，pdfjs 在那里解析。
+
+export interface PdfParseRequest {
+  target: typeof PARSE_RPC_TARGET;
+  op: "pdf";
+  /** PDF 原始字节的 base64（扩展消息通道不能直传 Uint8Array）。 */
+  data: string;
+}
+
+export interface PdfParseBlock {
+  text: string;
+  pageNumber: number;
+}
+
+export interface PdfParseResult {
+  title: string | null;
+  pageCount: number;
+  blocks: PdfParseBlock[];
+  /** 超长 PDF 被截断（块数达上限）。 */
+  truncated: boolean;
+}
+
+export type PdfParseResponse =
+  | { ok: true; value: PdfParseResult }
+  | { ok: false; error: string };
+
+export type ParseRpcRequest = ArticleParseRequest | PdfParseRequest;
