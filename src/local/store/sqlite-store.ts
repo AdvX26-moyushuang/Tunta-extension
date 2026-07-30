@@ -11,6 +11,7 @@ import type {
   StoredDocument,
   StoredEmbedding,
   StoredEntity,
+  StoredEntityEdge,
   StoredKaleidoscopeEdge,
   StoredMention,
   TuntaStore,
@@ -137,6 +138,18 @@ export class SqliteStore implements TuntaStore {
 
   listMentions(): Promise<StoredMention[]> {
     return call("listMentions", []);
+  }
+
+  setHubEntities(entityIds: string[]): Promise<void> {
+    return call("setHubEntities", [entityIds]);
+  }
+
+  replaceEntityEdges(edges: StoredEntityEdge[]): Promise<void> {
+    return call("replaceEntityEdges", [edges]);
+  }
+
+  listEntityEdges(): Promise<StoredEntityEdge[]> {
+    return call("listEntityEdges", []);
   }
 
   putKaleidoscopeEdges(edges: StoredKaleidoscopeEdge[]): Promise<void> {

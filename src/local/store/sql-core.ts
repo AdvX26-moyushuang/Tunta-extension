@@ -13,6 +13,7 @@ import {
   type StoredDocument,
   type StoredEmbedding,
   type StoredEntity,
+  type StoredEntityEdge,
   type StoredKaleidoscopeEdge,
   type StoredMention,
   type TuntaStore,
@@ -29,7 +30,7 @@ export interface SqlDriver {
   query(sql: string, params?: SqlValue[]): Promise<Record<string, unknown>[]>;
 }
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /** 计划 §Task1.3 的三张表 + TuntaStore 需要的 chat_history / kaleidoscope_edges。 */
 const SCHEMA_V1 = `
@@ -147,6 +148,21 @@ CREATE INDEX idx_mentions_card ON mentions(card_id);
 CREATE INDEX idx_mentions_source ON mentions(source_id);
 `;
 
+/**
+ * 实体共现边（计划 §Task3.3）：纯计算派生数据，重建时全量重写。
+ * is_hub 降级列落在 entities：高频泛化实体从图剔除但保留为标签。
+ */
+const SCHEMA_V9 = `
+ALTER TABLE entities ADD COLUMN is_hub INTEGER DEFAULT 0;
+
+CREATE TABLE entity_edges (
+  a_id TEXT NOT NULL, b_id TEXT NOT NULL,
+  cooccur_count INTEGER NOT NULL,
+  pmi REAL,
+  PRIMARY KEY (a_id, b_id)
+);
+`;
+
 const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)> = {
   1: SCHEMA_V1,
   2: SCHEMA_V2,
@@ -157,6 +173,7 @@ const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)
   /** 实体随卡持久化（计划 §Task3.1）：存量行保持 NULL，重跑策展后才有值。 */
   7: "ALTER TABLE cards ADD COLUMN entities TEXT",
   8: SCHEMA_V8,
+  9: SCHEMA_V9,
 };
 
 /**
@@ -350,7 +367,17 @@ function rowToEntity(row: Row): StoredEntity {
     type: row.type as StoredEntity["type"],
     canonicalId: (row.canonical_id as string | null) ?? null,
     mentionCount: Number(row.mention_count),
+    isHub: Number(row.is_hub) === 1,
     createdAt: row.created_at as string,
+  };
+}
+
+function rowToEntityEdge(row: Row): StoredEntityEdge {
+  return {
+    aId: row.a_id as string,
+    bId: row.b_id as string,
+    cooccurCount: Number(row.cooccur_count),
+    pmi: row.pmi === null || row.pmi === undefined ? null : Number(row.pmi),
   };
 }
 
@@ -700,6 +727,34 @@ export class SqlCore implements TuntaStore {
     return (await this.rows("SELECT * FROM mentions ORDER BY entity_id, card_id")).map(rowToMention);
   }
 
+  // entity edges（计划 §Task3.3）
+
+  async setHubEntities(entityIds: string[]): Promise<void> {
+    await this.inTransaction(async () => {
+      await this.driver.exec("UPDATE entities SET is_hub = 0");
+      if (entityIds.length > 0) {
+        const placeholders = entityIds.map(() => "?").join(", ");
+        await this.driver.exec(`UPDATE entities SET is_hub = 1 WHERE entity_id IN (${placeholders})`, entityIds);
+      }
+    });
+  }
+
+  async replaceEntityEdges(edges: StoredEntityEdge[]): Promise<void> {
+    await this.inTransaction(async () => {
+      await this.driver.exec("DELETE FROM entity_edges");
+      for (const edge of edges) {
+        await this.driver.exec(
+          "INSERT INTO entity_edges (a_id, b_id, cooccur_count, pmi) VALUES (?, ?, ?, ?)",
+          [edge.aId, edge.bId, edge.cooccurCount, edge.pmi],
+        );
+      }
+    });
+  }
+
+  async listEntityEdges(): Promise<StoredEntityEdge[]> {
+    return (await this.rows("SELECT * FROM entity_edges ORDER BY a_id, b_id")).map(rowToEntityEdge);
+  }
+
   // kaleidoscope edges
 
   async putKaleidoscopeEdges(edges: StoredKaleidoscopeEdge[]): Promise<void> {
@@ -735,6 +790,7 @@ export class SqlCore implements TuntaStore {
   async clearAllLocalData(): Promise<void> {
     await this.inTransaction(async () => {
       await this.driver.exec("DELETE FROM cards_fts");
+      await this.driver.exec("DELETE FROM entity_edges");
       await this.driver.exec("DELETE FROM mentions");
       // 先删被合并方（canonical_id 非空的子行）再全删：自引用外键无 ON DELETE 动作
       await this.driver.exec("DELETE FROM entities WHERE canonical_id IS NOT NULL");

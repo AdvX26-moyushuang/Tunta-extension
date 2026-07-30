@@ -1,7 +1,7 @@
 import type { CaptureFailure } from "@/shared/api/contracts";
 import { generateCardsForDocument } from "./cards";
 import { chunkBlocks } from "./chunk";
-import { linkSourceIntoGraph } from "./kaleidoscope";
+import { rebuildKnowledgeGraph } from "./kaleidoscope";
 import {
   getStore,
   type StoredCapture,
@@ -9,7 +9,7 @@ import {
 } from "./store";
 import { buildParserOutput, isXiaohongshuUrl, toCaptureParseWarnings } from "./parser";
 import { callEmbedding, ProviderError } from "./provider";
-import { isChatConfigured, isEmbeddingConfigured, loadSettings, type LocalSettings } from "./settings";
+import { isEmbeddingConfigured, loadSettings, type LocalSettings } from "./settings";
 import { expandListCaptures } from "./expand";
 import { executeSnapshotOnTab, SnapshotError, type SnapshotData } from "./snapshot";
 
@@ -301,13 +301,12 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
 
     
     if (capture.stage === "embed") {
-      if (isChatConfigured(settings) && capture.sourceId) {
-        try {
-          const linked = await linkSourceIntoGraph(settings, capture.sourceId);
-          console.info(`[tunta] 万花筒关联完成（${capture.captureId}）：${linked} 条关系边`);
-        } catch (cause) {
-          console.warn("[tunta] 万花筒关联失败（收藏不受影响）:", cause);
-        }
+      // 图谱重建是纯计算（计划 §Task3.3）：零 LLM，不依赖 provider 配置
+      try {
+        const result = await rebuildKnowledgeGraph();
+        console.info(`[tunta] 万花筒重建完成（${capture.captureId}）：${result.edges} 条关系边`);
+      } catch (cause) {
+        console.warn("[tunta] 万花筒重建失败（收藏不受影响）:", cause);
       }
       capture = await save({ ...capture, stage: "graph" });
     }

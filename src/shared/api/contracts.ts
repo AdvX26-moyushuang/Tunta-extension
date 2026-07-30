@@ -169,7 +169,7 @@ export interface LibraryResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Kaleidoscope 万花筒（App 级知识图谱：来源之间的 LLM 关联）
+// Kaleidoscope 万花筒（App 级知识图谱：来源之间的实体共现关联）
 // ---------------------------------------------------------------------------
 
 /** 万花筒节点：一条收藏来源（文档粒度，卡片数作为节点权重）。 */
@@ -182,7 +182,7 @@ export interface KaleidoscopeNode {
   cardCount: number;
 }
 
-/** 万花筒边：LLM 在新收藏入库时计算出的来源间实质关联（App 产品数据）。 */
+/** 万花筒边：从实体共现派生的来源间关联（纯计算，App 产品数据）。 */
 export interface KaleidoscopeEdge {
   edgeId: string;
   fromSourceId: string;
@@ -199,7 +199,7 @@ export interface KaleidoscopeGraph {
   edges: KaleidoscopeEdge[];
 }
 
-/** 重建万花筒关系网络的结果统计（N 个来源产生 N-1 次 provider 调用）。 */
+/** 重建万花筒关系网络的结果统计（实体共现纯计算，零 provider 调用）。 */
 export interface KaleidoscopeRebuildResult {
   sources: number;
   edges: number;

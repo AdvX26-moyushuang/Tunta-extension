@@ -3,15 +3,18 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { MemoryStore } from "./memory-store.js";
 import { SqlCore, SCHEMA_VERSION, type SqlDriver } from "./sql-core.js";
-import type {
-  StoredCapture,
-  StoredCard,
-  StoredChatTurn,
-  StoredChunk,
-  StoredDocument,
-  StoredEmbedding,
-  StoredKaleidoscopeEdge,
-  TuntaStore,
+import {
+  computeEntityGraph,
+  deriveSourceEdges,
+  type StoredCapture,
+  type StoredCard,
+  type StoredChatTurn,
+  type StoredChunk,
+  type StoredDocument,
+  type StoredEmbedding,
+  type StoredKaleidoscopeEdge,
+  type StoredMention,
+  type TuntaStore,
 } from "./types.js";
 
 /** 用 node:sqlite 跑同一份 SQL（计划 §Task1.3 验收方式），生产路径是 sqlite-wasm + OPFS。 */
@@ -511,7 +514,44 @@ for (const impl of implementations) {
     );
   });
 
-  test(`[${impl.name}] clearAllLocalData：九张表全部清空`, async () => {
+  test(`[${impl.name}] entity_edges 与 hub 标记：全量重写与重置`, async () => {
+    const store = impl.create();
+    await store.putDocument(makeDocument("src-a"));
+    const cards = [
+      makeCard({
+        cardId: "card:a:1",
+        sourceId: "src-a",
+        entities: [
+          { name: "AI", type: "concept" as const },
+          { name: "约束", type: "concept" as const },
+        ],
+      }),
+    ];
+    await store.putCards(cards);
+    await store.syncEntityMentionsForSource("src-a", cards);
+    assert.ok((await store.listEntities()).every((entity) => entity.isHub === false));
+
+    // hub 全量重置：入参内标 1，其余清 0
+    await store.setHubEntities(["entity:concept:ai"]);
+    assert.deepEqual(
+      (await store.listEntities()).map((entity) => [entity.entityId, entity.isHub]),
+      [
+        ["entity:concept:ai", true],
+        ["entity:concept:约束", false],
+      ],
+    );
+    await store.setHubEntities([]);
+    assert.ok((await store.listEntities()).every((entity) => !entity.isHub));
+
+    // 派生数据全量重写，不做增量
+    const edges = [{ aId: "entity:concept:ai", bId: "entity:concept:约束", cooccurCount: 1, pmi: 0 }];
+    await store.replaceEntityEdges(edges);
+    assert.deepEqual(await store.listEntityEdges(), edges);
+    await store.replaceEntityEdges([]);
+    assert.deepEqual(await store.listEntityEdges(), []);
+  });
+
+  test(`[${impl.name}] clearAllLocalData：十张表全部清空`, async () => {
     const store = impl.create();
     await store.putCapture(makeCapture({ captureId: "c1", url: "https://a.com" }));
     await store.putDocument(makeDocument("src-1"));
@@ -519,6 +559,7 @@ for (const impl of implementations) {
       makeCard({ cardId: "card:1", sourceId: "src-1", entities: [{ name: "约束", type: "concept" as const }] }),
     ]);
     await store.syncEntityMentionsForSource("src-1", await store.listCardsBySource("src-1"));
+    await store.replaceEntityEdges([{ aId: "entity:concept:a", bId: "entity:concept:b", cooccurCount: 1, pmi: null }]);
     await store.putChatTurn(makeChatTurn("q1", "2026-01-01T00:00:00.000Z"));
     await store.putKaleidoscopeEdges([makeEdge("s1", "s2")]);
     await store.putEmbeddings([makeEmbedding({ ownerId: "card:1", vector: [1, 0] })]);
@@ -535,6 +576,7 @@ for (const impl of implementations) {
     assert.deepEqual(await store.listChunksBySource("src-1"), []);
     assert.deepEqual(await store.listEntities(), []);
     assert.deepEqual(await store.listMentions(), []);
+    assert.deepEqual(await store.listEntityEdges(), []);
   });
 }
 
@@ -588,6 +630,7 @@ test("captures：V5 升级到 V6 时从 Parser Output 补回结构化告警", as
       status: "done",
     }),
   );
+  await driver.exec("DROP TABLE entity_edges");
   await driver.exec("DROP TABLE mentions");
   await driver.exec("DROP TABLE entities");
   await driver.exec("ALTER TABLE captures DROP COLUMN parse_warnings");
@@ -616,6 +659,7 @@ test("cards_fts：V2 库升级到 V3 时存量卡片可检索", async () => {
   await driver.exec("DROP TABLE cards_fts");
   await driver.exec("DROP TABLE embeddings");
   await driver.exec("DROP TABLE chunks");
+  await driver.exec("DROP TABLE entity_edges");
   await driver.exec("DROP TABLE mentions");
   await driver.exec("DROP TABLE entities");
   await driver.exec("ALTER TABLE captures DROP COLUMN parse_warnings");
@@ -652,4 +696,66 @@ test("embeddings：1000 条 768 维向量单次检索 <20ms", async () => {
   assert.equal(hits[0].ownerId, "card:500");
   assert.ok(Math.abs(hits[0].score - 1) < 1e-5);
   assert.ok(elapsed < 20, `单次检索耗时 ${elapsed.toFixed(2)}ms，超过 20ms 验收线`);
+});
+
+// ---- 图计算纯函数（计划 §Task3.3）：共现 + PMI + hub 降级，零 LLM ----
+
+function makeMention(entityId: string, cardId: string, sourceId: string): StoredMention {
+  return { entityId, cardId, blockId: null, sourceId };
+}
+
+test("computeEntityGraph：共现计数、PMI 与 hub 降级", () => {
+  const mentions = [
+    // "ai" 覆盖 4/10 张卡（>30%）→ hub
+    makeMention("entity:concept:ai", "card:1", "src-1"),
+    makeMention("entity:concept:ai", "card:2", "src-1"),
+    makeMention("entity:concept:ai", "card:3", "src-2"),
+    makeMention("entity:concept:ai", "card:4", "src-2"),
+    makeMention("entity:concept:x", "card:1", "src-1"),
+    makeMention("entity:concept:x", "card:2", "src-1"),
+    makeMention("entity:concept:x", "card:5", "src-3"),
+    makeMention("entity:concept:y", "card:1", "src-1"),
+    makeMention("entity:concept:y", "card:2", "src-1"),
+  ];
+  const { hubIds, edges } = computeEntityGraph(mentions, 10);
+  assert.deepEqual(hubIds, ["entity:concept:ai"]);
+  // hub 不建边，只剩 x–y（同卡 card:1 / card:2 两次共现）
+  assert.equal(edges.length, 1);
+  assert.equal(edges[0]!.aId, "entity:concept:x");
+  assert.equal(edges[0]!.bId, "entity:concept:y");
+  assert.equal(edges[0]!.cooccurCount, 2);
+  // pmi = ln(cooccur * totalCards / (countX * countY)) = ln(2*10 / (3*2))
+  assert.ok(Math.abs((edges[0]!.pmi ?? 0) - Math.log(20 / 6)) < 1e-9);
+  // 小库保护：卡片总数 < HUB_MIN_CARDS 时不降级
+  assert.deepEqual(computeEntityGraph(mentions, 9).hubIds, []);
+});
+
+test("deriveSourceEdges：来源边从共享实体派生，hub 不参与", () => {
+  const entities = [
+    { entityId: "entity:concept:ai", name: "AI" },
+    { entityId: "entity:concept:x", name: "X" },
+    { entityId: "entity:concept:y", name: "Y" },
+  ];
+  const mentions = [
+    // ai 覆盖 src-1/2/3，但是 hub → 不参与
+    makeMention("entity:concept:ai", "card:1", "src-1"),
+    makeMention("entity:concept:ai", "card:3", "src-2"),
+    makeMention("entity:concept:ai", "card:6", "src-3"),
+    // x/y 各覆盖 src-1、src-2 → 一条边，共享两个实体名
+    makeMention("entity:concept:x", "card:1", "src-1"),
+    makeMention("entity:concept:x", "card:3", "src-2"),
+    makeMention("entity:concept:y", "card:2", "src-1"),
+    makeMention("entity:concept:y", "card:4", "src-2"),
+  ];
+  const edges = deriveSourceEdges(entities, mentions, ["entity:concept:ai"], "2026-01-01T00:00:00.000Z");
+  assert.deepEqual(edges, [
+    {
+      edgeId: "kedge:src-1::src-2",
+      fromSourceId: "src-1",
+      toSourceId: "src-2",
+      relation: "共同涉及：X、Y",
+      strength: 2 / 3,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    },
+  ]);
 });

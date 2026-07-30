@@ -57,6 +57,8 @@ export interface StoredEntity {
   type: EntityType;
   canonicalId: string | null;
   mentionCount: number;
+  /** hub = 出现在超过 30% 卡片的泛化实体（计划 §Task3.3）：从图剔除但保留为标签。 */
+  isHub: boolean;
   createdAt: string;
 }
 
@@ -113,7 +115,7 @@ export function syncEntityState(
   const byId = new Map(entities.map((entity) => [entity.entityId, entity]));
   for (const entity of incoming.entities) {
     if (!byId.has(entity.entityId)) {
-      byId.set(entity.entityId, { ...entity, canonicalId: null, mentionCount: 0, createdAt: now });
+      byId.set(entity.entityId, { ...entity, canonicalId: null, mentionCount: 0, isHub: false, createdAt: now });
     }
   }
   const nextMentions = [...mentions.filter((mention) => mention.sourceId !== sourceId), ...incoming.mentions];
@@ -124,6 +126,113 @@ export function syncEntityState(
     mentionCount: counts.get(entity.entityId) ?? 0,
   }));
   return { entities: nextEntities, mentions: nextMentions };
+}
+
+// ---- 共现边（计划 §Task3.3）：纯计算，零 LLM ----
+
+/** 实体共现边，约定 aId < bId。派生数据：每次重建全量重写。 */
+export interface StoredEntityEdge {
+  aId: string;
+  bId: string;
+  cooccurCount: number;
+  pmi: number | null;
+}
+
+/** hub 判定阈值：出现在超过 30% 卡片的实体降级。 */
+export const HUB_CARD_RATIO = 0.3;
+/** 小库不降级：卡片太少时任何实体都容易越过比例线，图反而被清空。 */
+export const HUB_MIN_CARDS = 10;
+
+/**
+ * 实体共现图（计划 §Task3.3）：两实体同卡 → cooccur_count+1，PMI 重建时全量重算。
+ * hub 实体不参与建边（否则图退化成星型）。mentions 主键 (entityId, cardId)
+ * 保证每实体每卡至多一条 mention，实体的 mentionCount == 覆盖卡片数。
+ */
+export function computeEntityGraph(
+  mentions: StoredMention[],
+  totalCards: number,
+): { hubIds: string[]; edges: StoredEntityEdge[] } {
+  const cardCounts = new Map<string, number>();
+  for (const mention of mentions) {
+    cardCounts.set(mention.entityId, (cardCounts.get(mention.entityId) ?? 0) + 1);
+  }
+  const hubs = new Set<string>();
+  if (totalCards >= HUB_MIN_CARDS) {
+    for (const [entityId, count] of cardCounts) {
+      if (count > totalCards * HUB_CARD_RATIO) hubs.add(entityId);
+    }
+  }
+  const byCard = new Map<string, string[]>();
+  for (const mention of mentions) {
+    if (hubs.has(mention.entityId)) continue;
+    const list = byCard.get(mention.cardId) ?? [];
+    list.push(mention.entityId);
+    byCard.set(mention.cardId, list);
+  }
+  const cooccur = new Map<string, number>();
+  for (const list of byCard.values()) {
+    const sorted = [...list].sort();
+    for (let i = 0; i < sorted.length; i += 1) {
+      for (let j = i + 1; j < sorted.length; j += 1) {
+        const key = `${sorted[i]}\u0000${sorted[j]}`;
+        cooccur.set(key, (cooccur.get(key) ?? 0) + 1);
+      }
+    }
+  }
+  const edges: StoredEntityEdge[] = [...cooccur.entries()].map(([key, count]) => {
+    const [aId, bId] = key.split("\u0000") as [string, string];
+    // PMI = log(P(a,b) / (P(a)P(b)))，单位事件是「一张卡」
+    const pa = cardCounts.get(aId)!;
+    const pb = cardCounts.get(bId)!;
+    const pmi = totalCards > 0 ? Math.log((count * totalCards) / (pa * pb)) : null;
+    return { aId, bId, cooccurCount: count, pmi };
+  });
+  edges.sort((a, b) => a.aId.localeCompare(b.aId) || a.bId.localeCompare(b.bId));
+  return { hubIds: [...hubs].sort(), edges };
+}
+
+/**
+ * 来源关系边从共享实体派生（计划 §Task3.3 的「来源关系改查询」）：
+ * 两个 source 共享 ≥1 个非 hub 实体即建边，relation 列出共享实体名，
+ * 替代原来每次收藏一次 LLM 调用的 linkSourceIntoGraph。
+ */
+export function deriveSourceEdges(
+  entities: Pick<StoredEntity, "entityId" | "name">[],
+  mentions: StoredMention[],
+  hubIds: string[],
+  now: string,
+): StoredKaleidoscopeEdge[] {
+  const hubs = new Set(hubIds);
+  const names = new Map(entities.map((entity) => [entity.entityId, entity.name]));
+  const sourcesByEntity = new Map<string, Set<string>>();
+  for (const mention of mentions) {
+    if (hubs.has(mention.entityId)) continue;
+    const set = sourcesByEntity.get(mention.entityId) ?? new Set<string>();
+    set.add(mention.sourceId);
+    sourcesByEntity.set(mention.entityId, set);
+  }
+  const shared = new Map<string, { a: string; b: string; entityNames: string[] }>();
+  for (const [entityId, sources] of sourcesByEntity) {
+    const sorted = [...sources].sort();
+    for (let i = 0; i < sorted.length; i += 1) {
+      for (let j = i + 1; j < sorted.length; j += 1) {
+        const key = `${sorted[i]}\u0000${sorted[j]}`;
+        const entry = shared.get(key) ?? { a: sorted[i]!, b: sorted[j]!, entityNames: [] };
+        entry.entityNames.push(names.get(entityId) ?? entityId);
+        shared.set(key, entry);
+      }
+    }
+  }
+  return [...shared.values()]
+    .map(({ a, b, entityNames }) => ({
+      edgeId: kaleidoscopeEdgeId(a, b),
+      fromSourceId: a,
+      toSourceId: b,
+      relation: `共同涉及：${entityNames.slice(0, 3).join("、")}`,
+      strength: Math.min(1, entityNames.length / 3),
+      createdAt: now,
+    }))
+    .sort((a, b) => a.edgeId.localeCompare(b.edgeId));
 }
 
 export interface StoredChatTurn {
@@ -296,6 +405,13 @@ export interface TuntaStore {
   listEntities(): Promise<StoredEntity[]>;
   /** 全量返回：n 小，Task3.3 的共现边直接在内存里算。 */
   listMentions(): Promise<StoredMention[]>;
+
+  // entity edges（计划 §Task3.3）
+  /** hub 全量重置：入参内标 1，其余清 0。每次图谱重建时调用。 */
+  setHubEntities(entityIds: string[]): Promise<void>;
+  /** 派生数据全量重写，不做增量。 */
+  replaceEntityEdges(edges: StoredEntityEdge[]): Promise<void>;
+  listEntityEdges(): Promise<StoredEntityEdge[]>;
 
   // kaleidoscope edges
   putKaleidoscopeEdges(edges: StoredKaleidoscopeEdge[]): Promise<void>;

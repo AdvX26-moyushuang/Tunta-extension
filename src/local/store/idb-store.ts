@@ -16,13 +16,14 @@ import {
   type StoredDocument,
   type StoredEmbedding,
   type StoredEntity,
+  type StoredEntityEdge,
   type StoredKaleidoscopeEdge,
   type StoredMention,
   type TuntaStore,
 } from "./types";
 
 const DB_NAME = "tunta-local";
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -65,6 +66,10 @@ function openDb(): Promise<IDBDatabase> {
           // 与 SQL 主键 (entity_id, card_id) 对齐
           db.createObjectStore("mentions", { keyPath: ["entityId", "cardId"] });
         }
+        if (!db.objectStoreNames.contains("entity_edges")) {
+          // 与 SQL 主键 (a_id, b_id) 对齐
+          db.createObjectStore("entity_edges", { keyPath: ["aId", "bId"] });
+        }
         const cards = request.transaction?.objectStore("cards");
         if (cards) {
           const seenCards = new Set<string>();
@@ -97,7 +102,7 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges" | "embeddings" | "chunks" | "entities" | "mentions";
+type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges" | "embeddings" | "chunks" | "entities" | "mentions" | "entity_edges";
 
 async function withStore<T>(store: StoreName, mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const db = await openDb();
@@ -356,12 +361,48 @@ export class IdbStore implements TuntaStore {
   }
 
   async listEntities(): Promise<StoredEntity[]> {
-    return (await getAll<StoredEntity>("entities")).sort((a, b) => a.entityId.localeCompare(b.entityId));
+    // V7 写入的存量实体没有 isHub 字段，读时补齐默认值
+    return (await getAll<StoredEntity>("entities"))
+      .map((entity) => ({ ...entity, isHub: entity.isHub ?? false }))
+      .sort((a, b) => a.entityId.localeCompare(b.entityId));
   }
 
   async listMentions(): Promise<StoredMention[]> {
     return (await getAll<StoredMention>("mentions")).sort(
       (a, b) => a.entityId.localeCompare(b.entityId) || a.cardId.localeCompare(b.cardId),
+    );
+  }
+
+  // entity edges（计划 §Task3.3）：派生数据，重建时全量重写
+
+  async setHubEntities(entityIds: string[]): Promise<void> {
+    const hubs = new Set(entityIds);
+    const all = await this.listEntities();
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("entities", "readwrite");
+      const store = tx.objectStore("entities");
+      for (const entity of all) store.put({ ...entity, isHub: hubs.has(entity.entityId) });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("IDB entities hub update failed"));
+    });
+  }
+
+  async replaceEntityEdges(edges: StoredEntityEdge[]): Promise<void> {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("entity_edges", "readwrite");
+      const store = tx.objectStore("entity_edges");
+      store.clear();
+      for (const edge of edges) store.put(edge);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("IDB entity_edges replace failed"));
+    });
+  }
+
+  async listEntityEdges(): Promise<StoredEntityEdge[]> {
+    return (await getAll<StoredEntityEdge>("entity_edges")).sort(
+      (a, b) => a.aId.localeCompare(b.aId) || a.bId.localeCompare(b.bId),
     );
   }
 
@@ -411,7 +452,7 @@ export class IdbStore implements TuntaStore {
   async clearAllLocalData(): Promise<void> {
     const db = await openDb();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges", "embeddings", "chunks", "entities", "mentions"], "readwrite");
+      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges", "embeddings", "chunks", "entities", "mentions", "entity_edges"], "readwrite");
       tx.objectStore("captures").clear();
       tx.objectStore("documents").clear();
       tx.objectStore("cards").clear();
@@ -421,6 +462,7 @@ export class IdbStore implements TuntaStore {
       tx.objectStore("chunks").clear();
       tx.objectStore("entities").clear();
       tx.objectStore("mentions").clear();
+      tx.objectStore("entity_edges").clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error ?? new Error("IDB clearAll failed"));
     });

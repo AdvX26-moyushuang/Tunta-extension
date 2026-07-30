@@ -42,9 +42,9 @@ export interface TuntaApi {
   getStatus(): Promise<BackendStatus>;
   /** GET /api/library */
   getLibrary(): Promise<LibraryResponse>;
-  /** GET /api/kaleidoscope —— 万花筒知识图谱（来源节点 + LLM 关联边） */
+  /** GET /api/kaleidoscope —— 万花筒知识图谱（来源节点 + 实体共现关联边） */
   getKaleidoscope(): Promise<KaleidoscopeGraph>;
-  /** POST /api/kaleidoscope/rebuild —— 清空全部关联边后逐对重算（N 个来源 = N-1 次 provider 调用） */
+  /** POST /api/kaleidoscope/rebuild —— 实体共现纯计算重建（零 provider 调用） */
   rebuildKaleidoscope(): Promise<KaleidoscopeRebuildResult>;
   /** POST /api/retrieve { query, top_k } —— 关键词 + 语义混合检索 */
   retrieve(query: string, topK?: number): Promise<RetrieveResponse>;

@@ -25,7 +25,7 @@ import { sendMessage } from "@/shared/messages";
 import { runChatTurn, selectCardsForOpenQuery } from "./chat";
 import { chunkSourceId } from "./chunk";
 import { resetCaptureForRetry, resolveCaptureParseWarnings } from "./capture-state";
-import { rebuildAllGraphLinks } from "./kaleidoscope";
+import { rebuildKnowledgeGraph } from "./kaleidoscope";
 import {
   getStore,
   type StoredCapture,
@@ -361,11 +361,8 @@ export function createLocalApi(): TuntaApi {
     },
 
     rebuildKaleidoscope: async (): Promise<KaleidoscopeRebuildResult> => {
-      const settings = await loadSettings();
-      if (!isChatConfigured(settings)) {
-        throw new ApiError("尚未配置 provider：请在工作台「设置」页填写 API key 后再重建关系。", 400, "PROVIDER_NOT_CONFIGURED");
-      }
-      return rebuildAllGraphLinks(settings);
+      // 纯计算重建（计划 §Task3.3）：零 LLM，不再要求 provider 配置
+      return rebuildKnowledgeGraph();
     },
 
     retrieve: async (query, topK = 8): Promise<RetrieveResponse> => {

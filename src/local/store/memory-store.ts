@@ -16,6 +16,7 @@ import {
   type StoredDocument,
   type StoredEmbedding,
   type StoredEntity,
+  type StoredEntityEdge,
   type StoredKaleidoscopeEdge,
   type StoredMention,
   type TuntaStore,
@@ -40,6 +41,7 @@ export class MemoryStore implements TuntaStore {
   private chunks = new Map<string, StoredChunk>();
   private entities = new Map<string, StoredEntity>();
   private mentions: StoredMention[] = [];
+  private entityEdges: StoredEntityEdge[] = [];
 
   // captures
 
@@ -209,6 +211,23 @@ export class MemoryStore implements TuntaStore {
       .sort((a, b) => a.entityId.localeCompare(b.entityId) || a.cardId.localeCompare(b.cardId));
   }
 
+  // entity edges（计划 §Task3.3）
+
+  async setHubEntities(entityIds: string[]): Promise<void> {
+    const hubs = new Set(entityIds);
+    for (const [entityId, entity] of this.entities) {
+      this.entities.set(entityId, { ...entity, isHub: hubs.has(entityId) });
+    }
+  }
+
+  async replaceEntityEdges(edges: StoredEntityEdge[]): Promise<void> {
+    this.entityEdges = edges.map(clone);
+  }
+
+  async listEntityEdges(): Promise<StoredEntityEdge[]> {
+    return this.entityEdges.map(clone).sort((a, b) => a.aId.localeCompare(b.aId) || a.bId.localeCompare(b.bId));
+  }
+
   // kaleidoscope edges
 
   async putKaleidoscopeEdges(edges: StoredKaleidoscopeEdge[]): Promise<void> {
@@ -241,5 +260,6 @@ export class MemoryStore implements TuntaStore {
     this.chunks.clear();
     this.entities.clear();
     this.mentions = [];
+    this.entityEdges = [];
   }
 }
