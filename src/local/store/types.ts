@@ -251,6 +251,13 @@ export interface StoredKaleidoscopeEdge {
   createdAt: string;
 }
 
+/** 边解释缓存（计划 §Task3.5）：用户点开边时才调 LLM 生成，写入后永久命中。 */
+export interface StoredEdgeExplanation {
+  edgeId: string;
+  explanation: string;
+  createdAt: string;
+}
+
 export const CHAT_HISTORY_LIMIT = 100;
 
 // ---- chunks（计划 §Task2.3） ----
@@ -418,6 +425,10 @@ export interface TuntaStore {
   listKaleidoscopeEdges(): Promise<StoredKaleidoscopeEdge[]>;
   clearKaleidoscopeEdges(): Promise<void>;
   deleteKaleidoscopeEdgesForSource(sourceId: string): Promise<void>;
+
+  // edge explanations（计划 §Task3.5）：懒加载缓存，edgeId 跨重建稳定所以缓存可复用
+  getEdgeExplanation(edgeId: string): Promise<StoredEdgeExplanation | undefined>;
+  putEdgeExplanation(record: StoredEdgeExplanation): Promise<StoredEdgeExplanation>;
 
   // maintenance
   clearAllLocalData(): Promise<void>;

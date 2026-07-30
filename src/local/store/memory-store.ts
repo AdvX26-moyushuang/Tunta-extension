@@ -17,6 +17,7 @@ import {
   type StoredEmbedding,
   type StoredEntity,
   type StoredEntityEdge,
+  type StoredEdgeExplanation,
   type StoredKaleidoscopeEdge,
   type StoredMention,
   type TuntaStore,
@@ -42,6 +43,7 @@ export class MemoryStore implements TuntaStore {
   private entities = new Map<string, StoredEntity>();
   private mentions: StoredMention[] = [];
   private entityEdges: StoredEntityEdge[] = [];
+    private edgeExplanations = new Map<string, StoredEdgeExplanation>();
 
   // captures
 
@@ -250,6 +252,18 @@ export class MemoryStore implements TuntaStore {
     }
   }
 
+  // edge explanations（计划 §Task3.5）
+
+  async getEdgeExplanation(edgeId: string): Promise<StoredEdgeExplanation | undefined> {
+    const found = this.edgeExplanations.get(edgeId);
+    return found ? clone(found) : undefined;
+  }
+
+  async putEdgeExplanation(record: StoredEdgeExplanation): Promise<StoredEdgeExplanation> {
+    this.edgeExplanations.set(record.edgeId, clone(record));
+    return record;
+  }
+
   async clearAllLocalData(): Promise<void> {
     this.captures.clear();
     this.documents.clear();
@@ -261,5 +275,6 @@ export class MemoryStore implements TuntaStore {
     this.entities.clear();
     this.mentions = [];
     this.entityEdges = [];
+    this.edgeExplanations.clear();
   }
 }

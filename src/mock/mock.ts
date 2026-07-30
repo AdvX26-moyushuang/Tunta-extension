@@ -17,6 +17,7 @@ import type {
   ChatHistoryEntry,
   ChatTurn,
   ConfirmProposalResponse,
+  KaleidoscopeEdgeExplanation,
   KaleidoscopeGraph,
   KaleidoscopeRebuildResult,
   LibraryCard,
@@ -362,6 +363,18 @@ export function createMockApi(): TuntaApi {
         700,
       );
     },
+
+    explainKaleidoscopeEdge: (edgeId) =>
+      // mock 无 LLM：固定文案，模拟首次生成的延迟
+      delay<KaleidoscopeEdgeExplanation>(
+        {
+          edgeId,
+          explanation: "两条收藏都在讨论如何让收藏的内容重新进入注意力循环：一个从方法论角度论述回看的价值，另一个给出了具体的回看习惯建立方式。",
+          cached: false,
+          createdAt: nowIso(),
+        },
+        900,
+      ),
 
     retrieve: (query, topK = 8) => {
       void query;

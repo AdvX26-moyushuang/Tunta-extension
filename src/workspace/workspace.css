@@ -1666,6 +1666,39 @@ body {
   line-height: 1.5;
 }
 
+/* 边解释懒加载（计划 §Task3.5）：列表项包裹导航卡片 + 解释按钮/正文 */
+.kaleidoscope-relation-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kaleidoscope-relation-explain {
+  margin: 0;
+  padding: 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.kaleidoscope-relation-explain-btn {
+  align-self: flex-start;
+  padding: 0 14px;
+  border: 0;
+  background: none;
+  color: var(--brand-water);
+  font-size: 11.5px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.kaleidoscope-relation-explain-btn:disabled {
+  color: var(--muted);
+  cursor: default;
+  text-decoration: none;
+}
+
 .kaleidoscope-panel-hint {
   display: flex;
   height: 100%;

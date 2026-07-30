@@ -12,6 +12,7 @@ import type {
   StoredEmbedding,
   StoredEntity,
   StoredEntityEdge,
+  StoredEdgeExplanation,
   StoredKaleidoscopeEdge,
   StoredMention,
   TuntaStore,
@@ -166,6 +167,14 @@ export class SqliteStore implements TuntaStore {
 
   deleteKaleidoscopeEdgesForSource(sourceId: string): Promise<void> {
     return call("deleteKaleidoscopeEdgesForSource", [sourceId]);
+  }
+
+  getEdgeExplanation(edgeId: string): Promise<StoredEdgeExplanation | undefined> {
+    return call("getEdgeExplanation", [edgeId]);
+  }
+
+  putEdgeExplanation(record: StoredEdgeExplanation): Promise<StoredEdgeExplanation> {
+    return call("putEdgeExplanation", [record]);
   }
 
   clearAllLocalData(): Promise<void> {

@@ -6,6 +6,7 @@ import type {
   ChatHistoryEntry,
   ChatTurn,
   ConfirmProposalResponse,
+  KaleidoscopeEdgeExplanation,
   KaleidoscopeGraph,
   KaleidoscopeRebuildResult,
   LibraryCard,
@@ -25,7 +26,7 @@ import { sendMessage } from "@/shared/messages";
 import { runChatTurn, selectCardsForOpenQuery } from "./chat";
 import { chunkSourceId } from "./chunk";
 import { resetCaptureForRetry, resolveCaptureParseWarnings } from "./capture-state";
-import { rebuildKnowledgeGraph } from "./kaleidoscope";
+import { explainEdgeRelation, rebuildKnowledgeGraph } from "./kaleidoscope";
 import {
   getStore,
   type StoredCapture,
@@ -363,6 +364,27 @@ export function createLocalApi(): TuntaApi {
     rebuildKaleidoscope: async (): Promise<KaleidoscopeRebuildResult> => {
       // 纯计算重建（计划 §Task3.3）：零 LLM，不再要求 provider 配置
       return rebuildKnowledgeGraph();
+    },
+
+    explainKaleidoscopeEdge: async (edgeId): Promise<KaleidoscopeEdgeExplanation> => {
+      // 懒加载（计划 §Task3.5）：命中缓存零 LLM，未命中才调 provider 并写回
+      const cached = await getStore().getEdgeExplanation(edgeId);
+      if (cached) {
+        return { edgeId, explanation: cached.explanation, cached: true, createdAt: cached.createdAt };
+      }
+      const settings = await loadSettings();
+      if (!isChatConfigured(settings)) {
+        throw new ApiError("尚未配置 provider：请在工作台「设置」页填写 API key 后再生成解释。", 400, "PROVIDER_NOT_CONFIGURED");
+      }
+      const [edges, documents] = await Promise.all([getStore().listKaleidoscopeEdges(), getStore().listDocuments()]);
+      const edge = edges.find((item) => item.edgeId === edgeId);
+      if (!edge) {
+        throw new ApiError("这条关联已不存在（可能刚重建过图谱），请刷新后重试。", 404, "EDGE_NOT_FOUND");
+      }
+      const docs = new Map(documents.map((doc) => [doc.sourceId, doc]));
+      const explanation = await explainEdgeRelation(settings, edge, docs.get(edge.fromSourceId), docs.get(edge.toSourceId));
+      const record = await getStore().putEdgeExplanation({ edgeId, explanation, createdAt: nowIso() });
+      return { edgeId, explanation: record.explanation, cached: false, createdAt: record.createdAt };
     },
 
     retrieve: async (query, topK = 8): Promise<RetrieveResponse> => {

@@ -14,6 +14,7 @@ import {
   type StoredEmbedding,
   type StoredEntity,
   type StoredEntityEdge,
+  type StoredEdgeExplanation,
   type StoredKaleidoscopeEdge,
   type StoredMention,
   type TuntaStore,
@@ -30,7 +31,7 @@ export interface SqlDriver {
   query(sql: string, params?: SqlValue[]): Promise<Record<string, unknown>[]>;
 }
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /** 计划 §Task1.3 的三张表 + TuntaStore 需要的 chat_history / kaleidoscope_edges。 */
 const SCHEMA_V1 = `
@@ -163,6 +164,19 @@ CREATE TABLE entity_edges (
 );
 `;
 
+/**
+ * 边解释缓存（计划 §Task3.5）：用户点开边时才调 LLM 生成。
+ * edge_id 与 kaleidoscope_edges 对齐但不建外键：重建会清空边表，
+ * 而 edgeId 对同一对来源跨重建稳定，解释缓存应存活下来继续命中。
+ */
+const SCHEMA_V10 = `
+CREATE TABLE edge_explanations (
+  edge_id TEXT PRIMARY KEY,
+  explanation TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+`;
+
 const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)> = {
   1: SCHEMA_V1,
   2: SCHEMA_V2,
@@ -174,6 +188,7 @@ const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)
   7: "ALTER TABLE cards ADD COLUMN entities TEXT",
   8: SCHEMA_V8,
   9: SCHEMA_V9,
+  10: SCHEMA_V10,
 };
 
 /**
@@ -378,6 +393,14 @@ function rowToEntityEdge(row: Row): StoredEntityEdge {
     bId: row.b_id as string,
     cooccurCount: Number(row.cooccur_count),
     pmi: row.pmi === null || row.pmi === undefined ? null : Number(row.pmi),
+  };
+}
+
+function rowToEdgeExplanation(row: Row): StoredEdgeExplanation {
+  return {
+    edgeId: row.edge_id as string,
+    explanation: row.explanation as string,
+    createdAt: row.created_at as string,
   };
 }
 
@@ -785,6 +808,22 @@ export class SqlCore implements TuntaStore {
     await this.run("DELETE FROM kaleidoscope_edges WHERE from_source_id = ? OR to_source_id = ?", [sourceId, sourceId]);
   }
 
+  // edge explanations（计划 §Task3.5）
+
+  async getEdgeExplanation(edgeId: string): Promise<StoredEdgeExplanation | undefined> {
+    const rows = await this.rows("SELECT * FROM edge_explanations WHERE edge_id = ?", [edgeId]);
+    return rows[0] ? rowToEdgeExplanation(rows[0]) : undefined;
+  }
+
+  async putEdgeExplanation(record: StoredEdgeExplanation): Promise<StoredEdgeExplanation> {
+    await this.run(
+      `INSERT INTO edge_explanations (edge_id, explanation, created_at) VALUES (?, ?, ?)
+       ON CONFLICT(edge_id) DO UPDATE SET explanation = excluded.explanation, created_at = excluded.created_at`,
+      [record.edgeId, record.explanation, record.createdAt],
+    );
+    return record;
+  }
+
   // maintenance
 
   async clearAllLocalData(): Promise<void> {
@@ -800,6 +839,7 @@ export class SqlCore implements TuntaStore {
       await this.driver.exec("DELETE FROM cards");
       await this.driver.exec("DELETE FROM card_states");
       await this.driver.exec("DELETE FROM chat_history");
+      await this.driver.exec("DELETE FROM edge_explanations");
       await this.driver.exec("DELETE FROM kaleidoscope_edges");
       await this.driver.exec("DELETE FROM documents");
       await this.driver.exec("DELETE FROM captures");

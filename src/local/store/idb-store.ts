@@ -17,13 +17,14 @@ import {
   type StoredEmbedding,
   type StoredEntity,
   type StoredEntityEdge,
+  type StoredEdgeExplanation,
   type StoredKaleidoscopeEdge,
   type StoredMention,
   type TuntaStore,
 } from "./types";
 
 const DB_NAME = "tunta-local";
-const DB_VERSION = 8;
+const DB_VERSION = 9;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -70,6 +71,9 @@ function openDb(): Promise<IDBDatabase> {
           // 与 SQL 主键 (a_id, b_id) 对齐
           db.createObjectStore("entity_edges", { keyPath: ["aId", "bId"] });
         }
+        if (!db.objectStoreNames.contains("edge_explanations")) {
+          db.createObjectStore("edge_explanations", { keyPath: "edgeId" });
+        }
         const cards = request.transaction?.objectStore("cards");
         if (cards) {
           const seenCards = new Set<string>();
@@ -102,7 +106,7 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges" | "embeddings" | "chunks" | "entities" | "mentions" | "entity_edges";
+type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges" | "embeddings" | "chunks" | "entities" | "mentions" | "entity_edges" | "edge_explanations";
 
 async function withStore<T>(store: StoreName, mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const db = await openDb();
@@ -449,10 +453,23 @@ export class IdbStore implements TuntaStore {
     });
   }
 
+  // edge explanations（计划 §Task3.5）
+
+  async getEdgeExplanation(edgeId: string): Promise<StoredEdgeExplanation | undefined> {
+    return withStore<StoredEdgeExplanation | undefined>("edge_explanations", "readonly", (store) =>
+      store.get(edgeId) as IDBRequest<StoredEdgeExplanation | undefined>,
+    );
+  }
+
+  async putEdgeExplanation(record: StoredEdgeExplanation): Promise<StoredEdgeExplanation> {
+    await withStore("edge_explanations", "readwrite", (store) => store.put(record));
+    return record;
+  }
+
   async clearAllLocalData(): Promise<void> {
     const db = await openDb();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges", "embeddings", "chunks", "entities", "mentions", "entity_edges"], "readwrite");
+      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges", "embeddings", "chunks", "entities", "mentions", "entity_edges", "edge_explanations"], "readwrite");
       tx.objectStore("captures").clear();
       tx.objectStore("documents").clear();
       tx.objectStore("cards").clear();
@@ -463,6 +480,7 @@ export class IdbStore implements TuntaStore {
       tx.objectStore("entities").clear();
       tx.objectStore("mentions").clear();
       tx.objectStore("entity_edges").clear();
+      tx.objectStore("edge_explanations").clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error ?? new Error("IDB clearAll failed"));
     });

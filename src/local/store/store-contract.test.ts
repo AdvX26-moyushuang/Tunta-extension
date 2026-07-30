@@ -551,7 +551,21 @@ for (const impl of implementations) {
     assert.deepEqual(await store.listEntityEdges(), []);
   });
 
-  test(`[${impl.name}] clearAllLocalData：十张表全部清空`, async () => {
+  test(`[${impl.name}] edge_explanations：写入、覆盖与命中`, async () => {
+    const store = impl.create();
+    assert.equal(await store.getEdgeExplanation("kedge:s1::s2"), undefined);
+
+    const record = { edgeId: "kedge:s1::s2", explanation: "都在讲向量检索", createdAt: "2026-01-01T00:00:00.000Z" };
+    assert.deepEqual(await store.putEdgeExplanation(record), record);
+    assert.deepEqual(await store.getEdgeExplanation("kedge:s1::s2"), record);
+
+    // 同 edgeId 覆盖更新（重建后 edgeId 稳定，重新生成时直接覆盖）
+    const updated = { edgeId: "kedge:s1::s2", explanation: "新解释", createdAt: "2026-02-01T00:00:00.000Z" };
+    await store.putEdgeExplanation(updated);
+    assert.deepEqual(await store.getEdgeExplanation("kedge:s1::s2"), updated);
+  });
+
+  test(`[${impl.name}] clearAllLocalData：十一张表全部清空`, async () => {
     const store = impl.create();
     await store.putCapture(makeCapture({ captureId: "c1", url: "https://a.com" }));
     await store.putDocument(makeDocument("src-1"));
@@ -564,6 +578,7 @@ for (const impl of implementations) {
     await store.putKaleidoscopeEdges([makeEdge("s1", "s2")]);
     await store.putEmbeddings([makeEmbedding({ ownerId: "card:1", vector: [1, 0] })]);
     await store.replaceChunksForSource("src-1", [makeChunk("chunk:src-1:000", "src-1")]);
+    await store.putEdgeExplanation({ edgeId: "kedge:s1::s2", explanation: "测试解释", createdAt: "2026-01-01T00:00:00.000Z" });
 
     await store.clearAllLocalData();
     assert.equal((await store.listCaptures()).length, 0);
@@ -577,6 +592,7 @@ for (const impl of implementations) {
     assert.deepEqual(await store.listEntities(), []);
     assert.deepEqual(await store.listMentions(), []);
     assert.deepEqual(await store.listEntityEdges(), []);
+    assert.equal(await store.getEdgeExplanation("kedge:s1::s2"), undefined);
   });
 }
 
@@ -630,6 +646,7 @@ test("captures：V5 升级到 V6 时从 Parser Output 补回结构化告警", as
       status: "done",
     }),
   );
+  await driver.exec("DROP TABLE edge_explanations");
   await driver.exec("DROP TABLE entity_edges");
   await driver.exec("DROP TABLE mentions");
   await driver.exec("DROP TABLE entities");
@@ -659,6 +676,7 @@ test("cards_fts：V2 库升级到 V3 时存量卡片可检索", async () => {
   await driver.exec("DROP TABLE cards_fts");
   await driver.exec("DROP TABLE embeddings");
   await driver.exec("DROP TABLE chunks");
+  await driver.exec("DROP TABLE edge_explanations");
   await driver.exec("DROP TABLE entity_edges");
   await driver.exec("DROP TABLE mentions");
   await driver.exec("DROP TABLE entities");

@@ -17,6 +17,7 @@ import type {
   ChatTurn,
   ConfirmProposalRequest,
   ConfirmProposalResponse,
+  KaleidoscopeEdgeExplanation,
   KaleidoscopeGraph,
   KaleidoscopeRebuildResult,
   LibraryResponse,
@@ -46,6 +47,8 @@ export interface TuntaApi {
   getKaleidoscope(): Promise<KaleidoscopeGraph>;
   /** POST /api/kaleidoscope/rebuild —— 实体共现纯计算重建（零 provider 调用） */
   rebuildKaleidoscope(): Promise<KaleidoscopeRebuildResult>;
+  /** POST /api/kaleidoscope/edges/{edgeId}/explain —— 边解释懒加载（命中缓存零 LLM，计划 §Task3.5） */
+  explainKaleidoscopeEdge(edgeId: string): Promise<KaleidoscopeEdgeExplanation>;
   /** POST /api/retrieve { query, top_k } —— 关键词 + 语义混合检索 */
   retrieve(query: string, topK?: number): Promise<RetrieveResponse>;
   /** POST /api/chat { query } —— 调用模式，产出 grounded answer（chat 0.2.0） */
@@ -117,6 +120,10 @@ export function createRealApi(baseUrl: string): TuntaApi {
     getKaleidoscope: () => request<KaleidoscopeGraph>("/api/kaleidoscope"),
     rebuildKaleidoscope: () =>
       request<KaleidoscopeRebuildResult>("/api/kaleidoscope/rebuild", { method: "POST" }),
+    explainKaleidoscopeEdge: (edgeId) =>
+      request<KaleidoscopeEdgeExplanation>(`/api/kaleidoscope/edges/${encodeURIComponent(edgeId)}/explain`, {
+        method: "POST",
+      }),
     retrieve: (query, topK = 8) =>
       request<RetrieveResponse>("/api/retrieve", {
         method: "POST",

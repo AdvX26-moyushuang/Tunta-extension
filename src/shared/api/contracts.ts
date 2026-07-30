@@ -205,6 +205,14 @@ export interface KaleidoscopeRebuildResult {
   edges: number;
 }
 
+/** 边解释（计划 §Task3.5）：点开边时才调 LLM 生成，cached 表示本次命中缓存。 */
+export interface KaleidoscopeEdgeExplanation {
+  edgeId: string;
+  explanation: string;
+  cached: boolean;
+  createdAt: string;
+}
+
 /**
  * 检索命中的联合形态：card 是已过质量判断的提炼结果，chunk 是
  * 「AI 没提炼但原文有」的兜底（同分时卡片排在 chunk 前）。

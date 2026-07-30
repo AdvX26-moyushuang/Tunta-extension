@@ -9,14 +9,17 @@ interface KaleidoscopePageProps {
 
 /**
  * 万花筒：收藏来源的知识图谱。
- * 每次新收藏完成策展后，后台流水线会调用 provider 计算它与库中已有来源的
- * 实质关联并自动连边（见 src/local/kaleidoscope.ts）；这里只负责读取与渲染。
- * 节点大小反映该来源的卡片数量，连线标注 LLM 给出的关系短语与强度。
+ * 每次新收藏完成策展后，后台流水线用实体共现纯计算重建关联边
+ * （见 src/local/kaleidoscope.ts，零 LLM）；这里只负责读取与渲染。
+ * 节点大小反映该来源的卡片数量，边解释懒加载（计划 §Task3.5）：
+ * 点「为何相关」才调 LLM，结果缓存后不再重复调用。
  */
 export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
   const [graph, setGraph] = useState<KaleidoscopeGraph | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
+  const [explanations, setExplanations] = useState<Record<string, string>>({});
+  const [explainingEdgeId, setExplainingEdgeId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
@@ -44,6 +47,21 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
       setRebuilding(false);
     }
   }, [onToast, refresh]);
+
+  const explainEdge = useCallback(
+    async (edgeId: string) => {
+      setExplainingEdgeId(edgeId);
+      try {
+        const result = await getApi().explainKaleidoscopeEdge(edgeId);
+        setExplanations((prev) => ({ ...prev, [edgeId]: result.explanation }));
+      } catch (error) {
+        onToast(`解释生成失败：${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        setExplainingEdgeId(null);
+      }
+    },
+    [onToast],
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -168,7 +186,7 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
                   type="button"
                   className="btn"
                   disabled={rebuilding}
-                  title="清空全部关联后逐对重算：每个来源调用一次 LLM，库越大耗时越长"
+                  title="实体共现纯计算重建：零 LLM 调用，秒级完成"
                   onClick={() => void rebuild()}
                 >
                   {rebuilding ? "重建中…" : "重建关系"}
@@ -198,17 +216,30 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
                         <p className="kaleidoscope-relation-empty">暂无关联：继续收藏相关内容后会自动连边。</p>
                       ) : (
                         selectedRelations.map(({ edge, other }) => (
-                          <button
-                            key={edge.edgeId}
-                            type="button"
-                            className="kaleidoscope-relation"
-                            onClick={() => setSelectedId(other?.sourceId ?? null)}
-                          >
-                            <span className="kaleidoscope-relation-title">{other?.title ?? "未知来源"}</span>
-                            <span className="kaleidoscope-relation-why">
-                              {edge.relation} · {Math.round(edge.strength * 100)}%
-                            </span>
-                          </button>
+                          <div key={edge.edgeId} className="kaleidoscope-relation-item">
+                            <button
+                              type="button"
+                              className="kaleidoscope-relation"
+                              onClick={() => setSelectedId(other?.sourceId ?? null)}
+                            >
+                              <span className="kaleidoscope-relation-title">{other?.title ?? "未知来源"}</span>
+                              <span className="kaleidoscope-relation-why">
+                                {edge.relation} · {Math.round(edge.strength * 100)}%
+                              </span>
+                            </button>
+                            {explanations[edge.edgeId] ? (
+                              <p className="kaleidoscope-relation-explain">{explanations[edge.edgeId]}</p>
+                            ) : (
+                              <button
+                                type="button"
+                                className="kaleidoscope-relation-explain-btn"
+                                disabled={explainingEdgeId !== null}
+                                onClick={() => void explainEdge(edge.edgeId)}
+                              >
+                                {explainingEdgeId === edge.edgeId ? "解释生成中…" : "为何相关？"}
+                              </button>
+                            )}
+                          </div>
                         ))
                       )}
                     </div>
