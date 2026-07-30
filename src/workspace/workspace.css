@@ -663,6 +663,116 @@ body {
   font-size: var(--text-base);
 }
 
+/* ---------- KnowledgeCard 密度变体（计划 §Task5.1） ----------
+   compact / inline 复用 .knowledge-card 的纸面质感，只收紧尺寸；
+   刷卡页的 full 密度保持原样不受影响。 */
+
+.knowledge-card.kc-compact {
+  min-height: 0;
+  padding: 18px 20px;
+}
+
+.knowledge-card.kc-inline {
+  display: flex;
+  min-height: 0;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.kc-clickable {
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease;
+}
+
+.kc-clickable:hover {
+  transform: translateX(4px);
+  background: var(--brand-water-pale);
+  box-shadow: var(--outline-selected), var(--shadow-contact);
+}
+
+.kc-clickable:focus-visible {
+  outline: 2px solid var(--brand-sun);
+  outline-offset: 2px;
+}
+
+.kc-compact-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.kc-compact .card-type,
+.kc-inline .card-type {
+  padding: 4px 8px;
+  font-size: var(--text-xs);
+}
+
+.kc-compact-title {
+  margin: 12px 0 6px;
+  font-family: var(--serif);
+  font-size: var(--text-lg);
+  font-weight: 760;
+  line-height: 1.3;
+}
+
+.kc-compact-body {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+}
+
+.kc-compact-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.kc-compact-domains {
+  margin-top: 0;
+}
+
+.kc-compact-source {
+  overflow: hidden;
+  color: var(--brand-water-deep);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kc-inline-text {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.kc-inline-title {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kc-inline-summary {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .card-actions {
   position: relative;
   z-index: 2;

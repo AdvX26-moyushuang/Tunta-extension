@@ -3,6 +3,7 @@ import { getApi } from "@/shared/api";
 import type { ChatCitation, ChatHistoryEntry, ChatTurn } from "@/shared/api/contracts";
 import { formatTime, locatorText } from "@/shared/format";
 import { openExternal } from "@/shared/browser";
+import { KnowledgeCard } from "@/shared/components/KnowledgeCard";
 
 /** chunk 命中只通过 citations（source_kind: "chunk"）到达 UI；存量历史 turn 缺 source_kind 时视为 card。 */
 function chunkCitations(turn: ChatTurn): ChatCitation[] {
@@ -400,30 +401,27 @@ function ResultsView({ turn }: { turn: ChatTurn }) {
 
   return (
     <div className="result-list">
-      {turn.retrieved_cards.map((card, index) => {
+      {turn.retrieved_cards.map((card) => {
         const citation = citationByCard.get(card.card_id);
         return (
-          <button
+          <KnowledgeCard
             key={card.card_id}
-            type="button"
-            className="result-row"
-            onClick={() => {
-              if (citation?.original_url) void openExternal(citation.original_url);
+            density="compact"
+            card={{
+              cardId: card.card_id,
+              cardType: card.card_type,
+              title: card.title,
+              body: card.body,
+              domainLabels: card.domain_labels,
             }}
-          >
-            <span className="result-rank">{index + 1}</span>
-            <span>
-              <span className="result-title">{card.title}</span>
-              <span className="result-snippet">{card.body}</span>
-              <span className="result-source">
-                {card.card_id} · {card.domain_labels.join(" / ")}
-                {citation ? ` · ${citation.source_id}` : ""}
+            meta={citation ? citation.source_id : card.card_id}
+            badge={
+              <span className={`signal ${card.matched_by.length > 1 ? "both" : ""}`}>
+                {card.matched_by.map((channel) => (channel === "llm" ? "模型精选" : channel === "fts" ? "关键词" : channel === "vector" ? "向量" : channel)).join(" + ")}
               </span>
-            </span>
-            <span className={`signal ${card.matched_by.length > 1 ? "both" : ""}`}>
-              {card.matched_by.map((channel) => (channel === "llm" ? "模型精选" : channel === "fts" ? "关键词" : channel === "vector" ? "向量" : channel)).join(" + ")}
-            </span>
-          </button>
+            }
+            onOpen={citation?.original_url ? () => void openExternal(citation.original_url!) : undefined}
+          />
         );
       })}
       {chunkRows.map((citation, index) => (
@@ -435,7 +433,7 @@ function ResultsView({ turn }: { turn: ChatTurn }) {
             if (citation.original_url) void openExternal(citation.original_url);
           }}
         >
-          <span className="result-rank">{turn.retrieved_cards.length + index + 1}</span>
+          <span className="result-rank">{index + 1}</span>
           <span>
             <span className="result-title">原文片段（未经提炼）</span>
             <span className="result-snippet">{citation.quote ?? ""}</span>
