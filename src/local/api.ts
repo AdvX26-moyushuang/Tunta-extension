@@ -24,6 +24,7 @@ import { normalizeUrl } from "@/shared/format";
 import { sendMessage } from "@/shared/messages";
 import { runChatTurn, selectCardsForOpenQuery } from "./chat";
 import { chunkSourceId } from "./chunk";
+import { resetCaptureForRetry, resolveCaptureParseWarnings } from "./capture-state";
 import { rebuildAllGraphLinks } from "./kaleidoscope";
 import {
   getStore,
@@ -37,6 +38,7 @@ import {
   isXiaohongshuUrl,
   LIST_CHILD_ORIGIN,
   parserOutputToSource,
+  toCaptureParseWarnings,
   type ParserBlockKind,
   type ParserContentType,
   type ParserLocator,
@@ -85,6 +87,25 @@ function toPublicCapture(capture: StoredCapture): CaptureItem {
   void _expandLinks;
   void _attempts;
   return rest;
+}
+
+async function listPublicCaptures(): Promise<CaptureItem[]> {
+  const store = getStore();
+  const captures = await store.listCaptures();
+  if (!captures.some((capture) => capture.sourceId)) return captures.map(toPublicCapture);
+
+  // Parser Output 才是 warning 的 source of truth；capture 字段只是 Library 展示镜像。
+  const documents = new Map((await store.listDocuments()).map((document) => [document.sourceId, document]));
+  return captures.map((capture) => {
+    const warnings = resolveCaptureParseWarnings(
+      capture,
+      capture.sourceId ? documents.get(capture.sourceId) : undefined,
+    );
+    return toPublicCapture({
+      ...capture,
+      ...(warnings !== undefined ? { parseWarnings: warnings } : {}),
+    });
+  });
 }
 
 // 即时快照入库
@@ -524,11 +545,11 @@ export function createLocalApi(): TuntaApi {
           updatedAt: nowIso(),
           archived: false,
           failure: null,
+          parseWarnings: toCaptureParseWarnings(output.parse.warnings),
           ...(options.snapshot.listLinks?.length ? { expandLinks: options.snapshot.listLinks } : {}),
-          ...(options.snapshot.degradedNote ? { curationNote: options.snapshot.degradedNote } : {}),
         };
         await getStore().putCapture(capture);
-        sendMessage({ type: "tunta:run-pipeline", captureId });
+        await sendMessage({ type: "tunta:run-pipeline", captureId });
         return { capture: toPublicCapture(capture), duplicate: false };
       }
 
@@ -545,11 +566,11 @@ export function createLocalApi(): TuntaApi {
         failure: null,
       };
       await getStore().putCapture(capture);
-      sendMessage({ type: "tunta:run-pipeline", captureId: capture.captureId, tabId: options?.tabId });
+      await sendMessage({ type: "tunta:run-pipeline", captureId: capture.captureId, tabId: options?.tabId });
       return { capture: toPublicCapture(capture), duplicate: false };
     },
 
-    listCaptures: async (): Promise<CaptureItem[]> => (await getStore().listCaptures()).map(toPublicCapture),
+    listCaptures: listPublicCaptures,
 
     updateCaptureIntent: async (captureId, intent: CaptureIntent): Promise<CaptureItem> => {
       const capture = await getStore().getCapture(captureId);
@@ -564,9 +585,9 @@ export function createLocalApi(): TuntaApi {
       if (!capture) throw new ApiError(`收藏不存在：${captureId}`, 404, "CAPTURE_NOT_FOUND");
       
 
-      const next = { ...capture, status: "idle" as const, failure: null, attempts: 0, updatedAt: nowIso() };
+      const next = resetCaptureForRetry(capture, nowIso());
       await getStore().putCapture(next);
-      sendMessage({ type: "tunta:run-pipeline", captureId });
+      await sendMessage({ type: "tunta:run-pipeline", captureId });
       return toPublicCapture(next);
     },
 

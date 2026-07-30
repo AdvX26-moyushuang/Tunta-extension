@@ -7,7 +7,7 @@ import {
   type StoredCapture,
   type StoredDocument,
 } from "./store";
-import { buildParserOutput, isXiaohongshuUrl } from "./parser";
+import { buildParserOutput, isXiaohongshuUrl, toCaptureParseWarnings } from "./parser";
 import { callEmbedding, ProviderError } from "./provider";
 import { isChatConfigured, isEmbeddingConfigured, loadSettings, type LocalSettings } from "./settings";
 import { expandListCaptures } from "./expand";
@@ -226,8 +226,8 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
         stage: "snapshot",
         sourceId: doc.sourceId,
         title: doc.title,
+        parseWarnings: toCaptureParseWarnings(output.parse.warnings),
         ...(snapshot.listLinks?.length ? { expandLinks: snapshot.listLinks } : {}),
-        ...(snapshot.degradedNote ? { curationNote: snapshot.degradedNote } : {}),
       });
     }
 

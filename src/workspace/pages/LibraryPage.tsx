@@ -115,6 +115,22 @@ export function LibraryPage({ onToast }: LibraryPageProps) {
                   <div className="capture-title">{capture.title || "（等待解析标题）"}</div>
                   {capture.archived && <div className="capture-url">已归档</div>}
                   {capture.curationNote && <div className="capture-note">{capture.curationNote}</div>}
+                  {capture.parseWarnings && capture.parseWarnings.length > 0 && (
+                    <div className="capture-warning-list" aria-label="抓取告警">
+                      {capture.parseWarnings.map((warning, index) => (
+                        <div
+                          key={`${warning.stage}:${warning.code}:${index}`}
+                          className="capture-warning"
+                          title={`阶段：${warning.stage}；${warning.recoverable ? "可重试" : "不可重试"}`}
+                        >
+                          <strong>
+                            抓取告警 · {warning.stage} · {warning.code}
+                          </strong>
+                          <span>{warning.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="capture-url" title={capture.url}>
                   {capture.url}
@@ -131,9 +147,11 @@ export function LibraryPage({ onToast }: LibraryPageProps) {
                 <StatusChip status={capture.status} />
                 <span className="capture-url">{formatTime(capture.createdAt)}</span>
                 <div className="capture-actions">
-                  {capture.status === "failed" && (
+                  {!capture.archived &&
+                    (capture.status === "failed" ||
+                      (capture.status === "done" && (capture.parseWarnings?.length ?? 0) > 0)) && (
                     <button type="button" className="btn" onClick={() => void retry(capture)}>
-                      重试
+                      {capture.status === "failed" ? "重试" : "重新抓取"}
                     </button>
                   )}
                   {!capture.archived && (

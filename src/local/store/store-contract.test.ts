@@ -162,7 +162,22 @@ function makeChunk(chunkId: string, sourceId: string): StoredChunk {
 for (const impl of implementations) {
   test(`[${impl.name}] captures：增改查与按 createdAt 倒序`, async () => {
     const store = impl.create();
-    await store.putCapture(makeCapture({ captureId: "c1", url: "https://a.com", createdAt: "2026-01-01T00:00:00.000Z" }));
+    const parseWarnings = [
+      {
+        code: "BILIBILI_SUBTITLE_FETCH_FAILED",
+        message: "字幕轨道发现失败：protobuf decode failed",
+        stage: "extract" as const,
+        recoverable: true,
+      },
+    ];
+    await store.putCapture(
+      makeCapture({
+        captureId: "c1",
+        url: "https://a.com",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        parseWarnings,
+      }),
+    );
     await store.putCapture(makeCapture({ captureId: "c2", url: "https://b.com", createdAt: "2026-01-03T00:00:00.000Z" }));
     await store.putCapture(makeCapture({ captureId: "c3", url: "https://c.com", createdAt: "2026-01-02T00:00:00.000Z" }));
 
@@ -170,6 +185,7 @@ for (const impl of implementations) {
     assert.deepEqual(listed.map((item) => item.captureId), ["c2", "c3", "c1"]);
 
     assert.equal((await store.getCapture("c1"))?.url, "https://a.com");
+    assert.deepEqual((await store.getCapture("c1"))?.parseWarnings, parseWarnings);
     assert.equal((await store.getCaptureByUrl("https://b.com"))?.captureId, "c2");
     assert.equal(await store.getCapture("missing"), undefined);
     assert.equal(await store.getCaptureByUrl("https://missing.com"), undefined);
@@ -464,7 +480,43 @@ test("card_states：策展重跑（replaceCardsForSource）不影响用户状态
   assert.equal(Number(states[0].starred), 1);
 
   const versionRows = await driver.query("PRAGMA user_version");
-  assert.equal(Number(versionRows[0]?.user_version), 5);
+  assert.equal(Number(versionRows[0]?.user_version), 6);
+});
+
+test("captures：V5 升级到 V6 时从 Parser Output 补回结构化告警", async () => {
+  const driver = createNodeDriver();
+  const bootstrap = new SqlCore(driver);
+  const document = makeDocument("src-warning");
+  document.parserOutput.parse.status = "partial";
+  document.parserOutput.parse.warnings = [
+    {
+      code: "SUBTITLE_FETCH_FAILED",
+      message: "字幕抓取失败：player API code -403",
+      stage: "extract",
+      recoverable: true,
+    },
+  ];
+  await bootstrap.putDocument(document);
+  await bootstrap.putCapture(
+    makeCapture({
+      captureId: "cap-warning",
+      url: "https://www.bilibili.com/video/BV1WARNING",
+      sourceId: document.sourceId,
+      status: "done",
+    }),
+  );
+  await driver.exec("ALTER TABLE captures DROP COLUMN parse_warnings");
+  await driver.exec("PRAGMA user_version = 5");
+
+  const upgraded = new SqlCore(driver);
+  assert.deepEqual((await upgraded.getCapture("cap-warning"))?.parseWarnings, [
+    {
+      code: "SUBTITLE_FETCH_FAILED",
+      message: "字幕抓取失败：player API code -403",
+      stage: "extract",
+      recoverable: true,
+    },
+  ]);
 });
 
 // ---- cards_fts（计划 §Task2.1）：V2 → V3 升级时存量卡片回填索引 ----
@@ -478,6 +530,7 @@ test("cards_fts：V2 库升级到 V3 时存量卡片可检索", async () => {
   await driver.exec("DROP TABLE cards_fts");
   await driver.exec("DROP TABLE embeddings");
   await driver.exec("DROP TABLE chunks");
+  await driver.exec("ALTER TABLE captures DROP COLUMN parse_warnings");
   await driver.exec("PRAGMA user_version = 2");
 
   // 重新初始化：migrateV3 建表并回填存量卡片，V4/V5 补齐 embeddings / chunks 表

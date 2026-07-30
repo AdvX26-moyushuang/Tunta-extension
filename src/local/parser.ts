@@ -1,4 +1,4 @@
-import type { LibrarySource, SourceBlock } from "@/shared/api/contracts";
+import type { CaptureParseWarning, LibrarySource, SourceBlock } from "@/shared/api/contracts";
 
 export interface ParserLocator {
   kind: "timestamp" | "page" | "paragraph" | "dom" | "unknown";
@@ -40,6 +40,15 @@ export interface ParserProblem {
   stage: "fetch" | "extract" | "transcribe" | "ocr" | "normalize" | "store" | "unknown";
   recoverable: boolean;
   details?: Record<string, unknown>;
+}
+
+export function toCaptureParseWarnings(warnings: ParserProblem[]): CaptureParseWarning[] {
+  return warnings.map(({ code, message, stage, recoverable }) => ({
+    code,
+    message,
+    stage,
+    recoverable,
+  }));
 }
 
 export interface ParserAsset {
@@ -346,15 +355,16 @@ export type BilibiliSnapshotResult =
       title: string;
       author: string | null;
       cues: SubtitleCue[];
-      degraded?: "no-subtitle" | "subtitle-fetch-failed";
+      degraded?: "no-subtitle" | "subtitle-login-required" | "subtitle-fetch-failed";
+      degradedDetail?: string;
       description?: string;
     }
   | { ok: false; code: string; message: string };
 
-
 export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult> {
   const url = location.href;
   type BilibiliVideoData = {
+    aid?: number;
     title?: string;
     desc?: string;
     cid?: number;
@@ -372,8 +382,6 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
   const playinfo = (window as unknown as { __playinfo__?: { data?: { subtitle?: { subtitles?: unknown } } } }).__playinfo__;
   const bvid = /\/video\/(BV[0-9A-Za-z]+)/.exec(url)?.[1] ?? null;
   let metadataApiError: string | null = null;
-
-  
 
   if (!video && bvid) {
     try {
@@ -401,13 +409,17 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
   const title = (video?.title ?? (document.title || "").replace(/_哔哩哔哩_bilibili\s*$/, "").trim()) || url;
   const author = video?.owner?.name?.trim() || null;
   const description = (video?.desc ?? "").trim();
-  const makeDegraded = (kind: "no-subtitle" | "subtitle-fetch-failed"): BilibiliSnapshotResult => ({
+  const makeDegraded = (
+    kind: "no-subtitle" | "subtitle-login-required" | "subtitle-fetch-failed",
+    degradedDetail?: string,
+  ): BilibiliSnapshotResult => ({
     ok: true,
     url,
     title,
     author,
     cues: [],
     degraded: kind,
+    ...(degradedDetail ? { degradedDetail } : {}),
     description,
   });
 
@@ -421,58 +433,242 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
     };
   }
 
-  
-  type SubtitleEntry = { lan?: string; subtitle_url?: string };
+  type SubtitleEntry = { lan?: string; lan_doc?: string; subtitle_url?: string };
+  // 当前 B 站播放器从 x/v2/subtitle/web/view 读取 protobuf。这里只解码
+  // SubtitleViewReply.subtitle.subtitles 中实际需要的三个 string 字段，未知字段按 wire type 跳过。
+  // 本函数会被 executeScript 序列化注入 MAIN world，decoder 必须留在函数体内，不能依赖外部闭包。
+  const decodeSubtitleView = (bytes: Uint8Array): SubtitleEntry[] => {
+    type ProtobufField = { fieldNumber: number; wireType: number; payload?: Uint8Array };
+    const parseFields = (input: Uint8Array): ProtobufField[] => {
+      const fields: ProtobufField[] = [];
+      let offset = 0;
+      const readVarint = (): number => {
+        let result = 0;
+        let multiplier = 1;
+        for (let count = 0; count < 10; count += 1) {
+          if (offset >= input.length) throw new Error("truncated varint");
+          const byte = input[offset];
+          offset += 1;
+          result += (byte & 0x7f) * multiplier;
+          if ((byte & 0x80) === 0) return result;
+          multiplier *= 128;
+        }
+        throw new Error("varint exceeds 10 bytes");
+      };
+      const skipVarint = (): void => {
+        for (let count = 0; count < 10; count += 1) {
+          if (offset >= input.length) throw new Error("truncated varint field");
+          const byte = input[offset];
+          offset += 1;
+          if ((byte & 0x80) === 0) return;
+        }
+        throw new Error("varint field exceeds 10 bytes");
+      };
+      const requireBytes = (length: number): void => {
+        if (length < 0 || offset + length > input.length) throw new Error("truncated field payload");
+      };
+
+      while (offset < input.length) {
+        const tag = readVarint();
+        const fieldNumber = Math.floor(tag / 8);
+        const wireType = tag & 7;
+        if (fieldNumber <= 0) throw new Error(`invalid field number ${fieldNumber}`);
+        if (wireType === 0) {
+          skipVarint();
+          fields.push({ fieldNumber, wireType });
+        } else if (wireType === 1) {
+          requireBytes(8);
+          offset += 8;
+          fields.push({ fieldNumber, wireType });
+        } else if (wireType === 2) {
+          const length = readVarint();
+          requireBytes(length);
+          const payload = input.slice(offset, offset + length);
+          offset += length;
+          fields.push({ fieldNumber, wireType, payload });
+        } else if (wireType === 5) {
+          requireBytes(4);
+          offset += 4;
+          fields.push({ fieldNumber, wireType });
+        } else {
+          throw new Error(`unsupported wire type ${wireType}`);
+        }
+      }
+      return fields;
+    };
+
+    const textDecoder = new TextDecoder();
+    const rootSubtitle = parseFields(bytes).find((field) => field.fieldNumber === 1 && field.wireType === 2)?.payload;
+    if (!rootSubtitle) return [];
+    const entries: SubtitleEntry[] = [];
+    for (const itemField of parseFields(rootSubtitle)) {
+      if (itemField.fieldNumber !== 3 || itemField.wireType !== 2 || !itemField.payload) continue;
+      const itemFields = parseFields(itemField.payload);
+      const stringValue = (fieldNumber: number): string | undefined => {
+        const payload = itemFields.find((field) => field.fieldNumber === fieldNumber && field.wireType === 2)?.payload;
+        return payload ? textDecoder.decode(payload) : undefined;
+      };
+      entries.push({
+        lan: stringValue(3),
+        lan_doc: stringValue(4),
+        subtitle_url: stringValue(5),
+      });
+    }
+    return entries;
+  };
+  const decodeSubtitleUrl = (rawUrl: string): string => {
+    const match = /^\/\/subtitle\.bilibili\.com\/([^?]+)(?:\?(.*))?$/.exec(rawUrl);
+    if (!match) return rawUrl;
+    const decoders: [prefix: string, key: string][] = [
+      ['nP](wOFRvU.+<fjS{jn-!$D|Dz&",zT`', "=CFxYRn{.y|uVyO$uh&sikph?N.ilF/`"],
+      ['Bn"q~|albg@]Go~ACgyDvKnd+)_D}^&J?', "Cu~L!xs~f^&r@'vh=q]q{eeng*sEg^kp#J"],
+    ];
+    let encodedPath: string;
+    try {
+      encodedPath = decodeURIComponent(match[1]);
+    } catch (cause) {
+      throw new Error(`invalid obfuscated subtitle URL: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    for (const [prefix, key] of decoders) {
+      const xorKey = `${key}bilibili`;
+      let decoded = "";
+      for (let index = 0; index < encodedPath.length; index += 1) {
+        decoded += String.fromCharCode(
+          encodedPath.charCodeAt(index) ^ xorKey.charCodeAt(index % xorKey.length),
+        );
+      }
+      if (decoded.startsWith(prefix)) {
+        const path = decoded.slice(prefix.length);
+        if (!path) break;
+        return `//aisubtitle.hdslb.com${path}${match[2] ? `?${match[2]}` : ""}`;
+      }
+    }
+    throw new Error("unknown Bilibili subtitle URL obfuscation key");
+  };
   let entries = Array.isArray(playinfo?.data?.subtitle?.subtitles)
     ? (playinfo.data!.subtitle!.subtitles as SubtitleEntry[])
     : [];
+  const subtitleDiscoveryErrors: string[] = [];
+  let subtitleLoginRequired = false;
 
-    
   if (entries.length === 0) {
     const pageNo = Math.max(1, Number(new URLSearchParams(location.search).get("p") ?? "1") || 1);
     const cid = video?.pages?.[pageNo - 1]?.cid ?? video?.cid ?? null;
-    if (bvid && cid) {
+    const aid = video?.aid ?? null;
+    if (aid && cid) {
+      const params = new URLSearchParams({
+        oid: String(cid),
+        pid: String(aid),
+        context_ext: JSON.stringify({ video_type: 1 }),
+        type: "1",
+        cur_production_type: "0",
+        preferred_language: "ai-zh",
+        playlist_switch: "0",
+      });
       try {
-        const response = await fetch(`https://api.bilibili.com/x/player/v2?bvid=${bvid}&cid=${cid}`, {
+        const response = await fetch(`https://api.bilibili.com/x/v2/subtitle/web/view?${params.toString()}`, {
           credentials: "include",
           signal: AbortSignal.timeout(10_000),
         });
-        if (response.ok) {
-          const json = (await response.json()) as { data?: { subtitle?: { subtitles?: SubtitleEntry[] } } };
-          if (Array.isArray(json?.data?.subtitle?.subtitles)) {
-            entries = json.data.subtitle.subtitles;
+        if (!response.ok) {
+          subtitleDiscoveryErrors.push(`subtitle protobuf API HTTP ${response.status}`);
+        } else {
+          try {
+            entries = decodeSubtitleView(new Uint8Array(await response.arrayBuffer()));
+          } catch (cause) {
+            subtitleDiscoveryErrors.push(
+              `subtitle protobuf decode failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            );
           }
         }
-      } catch {
-        
+      } catch (cause) {
+        subtitleDiscoveryErrors.push(
+          `subtitle protobuf API request failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+      }
+    }
+    if (bvid && cid) {
+      if (entries.length === 0) {
+        try {
+          const response = await fetch(`https://api.bilibili.com/x/player/wbi/v2?bvid=${bvid}&cid=${cid}`, {
+            credentials: "include",
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) {
+            subtitleDiscoveryErrors.push(`player WBI API HTTP ${response.status}`);
+          } else {
+            const json = (await response.json()) as {
+              code?: number;
+              message?: string;
+              data?: {
+                need_login_subtitle?: boolean;
+                subtitle?: { subtitles?: SubtitleEntry[] };
+              };
+            };
+            if (json.code !== undefined && json.code !== 0) {
+              subtitleDiscoveryErrors.push(`player WBI API code ${json.code}: ${json.message ?? "missing data"}`);
+            } else {
+              subtitleLoginRequired = json.data?.need_login_subtitle === true;
+              if (Array.isArray(json?.data?.subtitle?.subtitles)) {
+                entries = json.data.subtitle.subtitles;
+              }
+            }
+          }
+        } catch (cause) {
+          subtitleDiscoveryErrors.push(
+            `player WBI API request failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          );
+        }
       }
     }
   }
 
   if (entries.length === 0) {
+    if (subtitleLoginRequired) {
+      return makeDegraded("subtitle-login-required", "player WBI API requires a logged-in Bilibili session");
+    }
+    if (subtitleDiscoveryErrors.length > 0) {
+      return makeDegraded("subtitle-fetch-failed", subtitleDiscoveryErrors.join("; "));
+    }
     return makeDegraded("no-subtitle");
   }
 
-  const preferred = entries.find((item) => /zh|中文|ai-zh/i.test(item.lan ?? "")) ?? entries[0];
+  const preferred =
+    entries.find((item) => /zh|中文|ai-zh/i.test(`${item.lan ?? ""} ${item.lan_doc ?? ""}`)) ?? entries[0];
   const rawUrl = preferred.subtitle_url ?? "";
   if (!rawUrl) {
-    return makeDegraded("no-subtitle");
+    return makeDegraded("subtitle-fetch-failed", "subtitle track is missing subtitle_url");
   }
-  const subtitleUrl = rawUrl.startsWith("http") ? rawUrl : `https:${rawUrl}`;
+  let decodedUrl: string;
+  try {
+    decodedUrl = decodeSubtitleUrl(rawUrl);
+  } catch (cause) {
+    return makeDegraded(
+      "subtitle-fetch-failed",
+      `subtitle URL decode failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+  const subtitleUrl = decodedUrl.startsWith("http") ? decodedUrl : `https:${decodedUrl}`;
   let body: { from?: number; to?: number; content?: string }[];
   try {
     const response = await fetch(subtitleUrl, {
-      credentials: "include",
+      // signed CDN URL 自带 auth_key。跨域请求携带 cookie 会触发 CORS credentials 校验，
+      // aisubtitle CDN 不需要也不应收到 B 站登录态。
+      credentials: "omit",
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) {
-      
-      return makeDegraded("subtitle-fetch-failed");
+      return makeDegraded("subtitle-fetch-failed", `subtitle file HTTP ${response.status}`);
     }
     const json = (await response.json()) as { body?: { from?: number; to?: number; content?: string }[] };
     body = Array.isArray(json.body) ? json.body : [];
-  } catch {
-    return makeDegraded("subtitle-fetch-failed");
+  } catch (cause) {
+    return makeDegraded(
+      "subtitle-fetch-failed",
+      `subtitle file request failed (aisubtitle CDN, credentials=omit): ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
   }
   const cues = body
     .filter((cue) => typeof cue?.content === "string" && cue.content.trim().length > 0)
@@ -483,7 +679,7 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
       text: (cue.content ?? "").trim(),
     }));
   if (cues.length === 0) {
-    return makeDegraded("no-subtitle");
+    return makeDegraded("subtitle-fetch-failed", "subtitle file contained no usable cues");
   }
   return { ok: true, url, title, author, cues };
 }

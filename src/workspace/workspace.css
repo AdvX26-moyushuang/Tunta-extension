@@ -1175,6 +1175,28 @@ body {
   overflow-wrap: anywhere;
 }
 
+.capture-warning-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.capture-warning {
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: var(--r-sm);
+  background: rgba(188, 126, 42, 0.1);
+  color: #8b5b1e;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.capture-warning strong {
+  font-weight: 650;
+}
+
 .capture-row > .status-chip {
   width: 100%;
   justify-content: center;

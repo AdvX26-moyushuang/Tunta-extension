@@ -40,14 +40,72 @@ function fakeDocument(entries: Record<string, Element[]>, title = ""): Document 
   } as unknown as Document;
 }
 
-test("uses the Bilibili view API when hydration globals are missing", async () => {
+function encodeVarint(value: number): Uint8Array {
+  const bytes: number[] = [];
+  let remaining = value;
+  while (remaining >= 0x80) {
+    bytes.push((remaining & 0x7f) | 0x80);
+    remaining = Math.floor(remaining / 0x80);
+  }
+  bytes.push(remaining);
+  return Uint8Array.from(bytes);
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const result = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+function lengthDelimitedField(fieldNumber: number, payload: Uint8Array): Uint8Array {
+  return concatBytes(encodeVarint((fieldNumber << 3) | 2), encodeVarint(payload.length), payload);
+}
+
+function stringField(fieldNumber: number, value: string): Uint8Array {
+  return lengthDelimitedField(fieldNumber, new TextEncoder().encode(value));
+}
+
+function subtitleViewFixture(entries: { lan: string; lanDoc: string; subtitleUrl: string }[]): Uint8Array {
+  const items = entries.map((entry) =>
+    lengthDelimitedField(
+      3,
+      concatBytes(
+        stringField(3, entry.lan),
+        stringField(4, entry.lanDoc),
+        stringField(5, entry.subtitleUrl),
+      ),
+    ),
+  );
+  return lengthDelimitedField(1, concatBytes(...items));
+}
+
+function obfuscatedBilibiliSubtitleUrl(path: string, query: string): string {
+  const prefix = 'nP](wOFRvU.+<fjS{jn-!$D|Dz&",zT`';
+  const key = "=CFxYRn{.y|uVyO$uh&sikph?N.ilF/`bilibili";
+  const plain = `${prefix}${path}`;
+  let encoded = "";
+  for (let index = 0; index < plain.length; index += 1) {
+    encoded += String.fromCharCode(plain.charCodeAt(index) ^ key.charCodeAt(index % key.length));
+  }
+  return `//subtitle.bilibili.com/${encodeURIComponent(encoded)}?${query}`;
+}
+
+test("uses Bilibili's protobuf subtitle API when hydration globals are missing", async () => {
   const pageUrl = "https://www.bilibili.com/video/BV1TEST12345?p=2";
+  const subtitleViewUrl =
+    "https://api.bilibili.com/x/v2/subtitle/web/view?oid=202&pid=1001&context_ext=%7B%22video_type%22%3A1%7D&type=1&cur_production_type=0&preferred_language=ai-zh&playlist_switch=0";
+  const subtitleFileUrl = "https://aisubtitle.hdslb.com/bfs/ai_subtitle/test.json?auth_key=test";
   const requests: string[] = [];
+  let subtitleFileCredentials: RequestCredentials | undefined;
   const restore = [
     setGlobal("window", {}),
     setGlobal("document", { title: "页面标题_哔哩哔哩_bilibili" }),
     setGlobal("location", new URL(pageUrl)),
-    setGlobal("fetch", async (input: string | URL | Request) => {
+    setGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       requests.push(url);
 
@@ -55,6 +113,7 @@ test("uses the Bilibili view API when hydration globals are missing", async () =
         return Response.json({
           code: 0,
           data: {
+            aid: 1001,
             title: "API 返回的视频标题",
             desc: "API 返回的视频简介",
             cid: 101,
@@ -67,17 +126,20 @@ test("uses the Bilibili view API when hydration globals are missing", async () =
         });
       }
 
-      if (url === "https://api.bilibili.com/x/player/v2?bvid=BV1TEST12345&cid=202") {
-        return Response.json({
-          data: {
-            subtitle: {
-              subtitles: [{ lan: "ai-zh", subtitle_url: "//subtitle.example/cues.json" }],
+      if (url === subtitleViewUrl) {
+        return new Response(
+          subtitleViewFixture([
+            {
+              lan: "ai-zh",
+              lanDoc: "中文",
+              subtitleUrl: obfuscatedBilibiliSubtitleUrl("/bfs/ai_subtitle/test.json", "auth_key=test"),
             },
-          },
-        });
+          ]),
+        );
       }
 
-      if (url === "https://subtitle.example/cues.json") {
+      if (url === subtitleFileUrl) {
+        subtitleFileCredentials = init?.credentials;
         return Response.json({
           body: [{ from: 1.25, to: 2.5, content: "缺失 hydration global 时仍能提取字幕。" }],
         });
@@ -103,9 +165,97 @@ test("uses the Bilibili view API when hydration globals are missing", async () =
     ]);
     assert.deepEqual(requests, [
       "https://api.bilibili.com/x/web-interface/view?bvid=BV1TEST12345",
-      "https://api.bilibili.com/x/player/v2?bvid=BV1TEST12345&cid=202",
-      "https://subtitle.example/cues.json",
+      subtitleViewUrl,
+      subtitleFileUrl,
     ]);
+    assert.equal(subtitleFileCredentials, "omit");
+  } finally {
+    for (const restoreGlobal of restore.reverse()) restoreGlobal();
+  }
+});
+
+test("surfaces when Bilibili subtitles require a logged-in page session", async () => {
+  const pageUrl = "https://www.bilibili.com/video/BV1LOGIN1234";
+  const subtitleViewUrl =
+    "https://api.bilibili.com/x/v2/subtitle/web/view?oid=303&pid=2002&context_ext=%7B%22video_type%22%3A1%7D&type=1&cur_production_type=0&preferred_language=ai-zh&playlist_switch=0";
+  const requests: string[] = [];
+  const restore = [
+    setGlobal("window", {
+      __INITIAL_STATE__: {
+        videoData: {
+          aid: 2002,
+          title: "登录字幕测试",
+          desc: "公开视频简介",
+          cid: 303,
+          owner: { name: "测试 UP 主" },
+        },
+      },
+    }),
+    setGlobal("document", { title: "登录字幕测试_哔哩哔哩_bilibili" }),
+    setGlobal("location", new URL(pageUrl)),
+    setGlobal("fetch", async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      requests.push(url);
+      if (url === subtitleViewUrl) {
+        return new Response(new Uint8Array());
+      }
+      if (url === "https://api.bilibili.com/x/player/wbi/v2?bvid=BV1LOGIN1234&cid=303") {
+        return Response.json({
+          code: 0,
+          data: {
+            need_login_subtitle: true,
+            subtitle: { subtitles: [] },
+          },
+        });
+      }
+      return new Response(null, { status: 404 });
+    }),
+  ];
+
+  try {
+    const result = await extractBilibiliSnapshot();
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.degraded, "subtitle-login-required");
+    assert.match(result.degradedDetail ?? "", /logged-in Bilibili session/i);
+    assert.deepEqual(requests, [
+      subtitleViewUrl,
+      "https://api.bilibili.com/x/player/wbi/v2?bvid=BV1LOGIN1234&cid=303",
+    ]);
+  } finally {
+    for (const restoreGlobal of restore.reverse()) restoreGlobal();
+  }
+});
+
+test("preserves Bilibili subtitle discovery API failures", async () => {
+  const pageUrl = "https://www.bilibili.com/video/BV1ERROR1234";
+  const restore = [
+    setGlobal("window", {
+      __INITIAL_STATE__: {
+        videoData: {
+          title: "字幕错误测试",
+          cid: 404,
+        },
+      },
+    }),
+    setGlobal("document", { title: "字幕错误测试_哔哩哔哩_bilibili" }),
+    setGlobal("location", new URL(pageUrl)),
+    setGlobal("fetch", async () =>
+      Response.json({
+        code: -403,
+        message: "访问权限不足",
+      }),
+    ),
+  ];
+
+  try {
+    const result = await extractBilibiliSnapshot();
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.degraded, "subtitle-fetch-failed");
+    assert.match(result.degradedDetail ?? "", /player WBI API code -403: 访问权限不足/);
   } finally {
     for (const restoreGlobal of restore.reverse()) restoreGlobal();
   }

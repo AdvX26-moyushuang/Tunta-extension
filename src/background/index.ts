@@ -45,13 +45,15 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((raw: TuntaMessage) => {
+chrome.runtime.onMessage.addListener((raw: TuntaMessage, _sender, sendResponse) => {
   if (raw?.type === "tunta:capture-submitted") {
     setBadge("…");
     setTimeout(() => setBadge(""), 8000);
+    sendResponse({ accepted: true });
     return;
   }
   if (raw?.type === "tunta:run-pipeline") {
+    sendResponse({ accepted: true });
     void runWithBadge(raw.captureId, raw.tabId).catch((cause) => {
       console.warn("[tunta] pipeline 执行异常:", cause);
       setBadge("!", "#d83a3a");

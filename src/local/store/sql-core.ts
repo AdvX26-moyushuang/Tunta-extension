@@ -26,7 +26,7 @@ export interface SqlDriver {
   query(sql: string, params?: SqlValue[]): Promise<Record<string, unknown>[]>;
 }
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** 计划 §Task1.3 的三张表 + TuntaStore 需要的 chat_history / kaleidoscope_edges。 */
 const SCHEMA_V1 = `
@@ -123,6 +123,7 @@ const MIGRATIONS: Record<number, string | ((driver: SqlDriver) => Promise<void>)
   3: migrateV3,
   4: SCHEMA_V4,
   5: SCHEMA_V5,
+  6: migrateV6,
 };
 
 /**
@@ -146,6 +147,33 @@ async function migrateV3(driver: SqlDriver): Promise<void> {
     await driver.exec("INSERT INTO cards_fts (rowid, fts_text) VALUES (?, ?)", [
       Number(row.rowid),
       tokenize(cardFtsText(card)).join(" "),
+    ]);
+  }
+}
+
+/**
+ * Parser 非致命告警与 AI curation_note 分栏持久化。
+ * V5 记录的 warning 已在 documents.parser_output，升级时原样补回 capture，
+ * 这样旧的「简介降级成功」记录也能直接看见原因并重新抓取。
+ */
+async function migrateV6(driver: SqlDriver): Promise<void> {
+  await driver.exec("ALTER TABLE captures ADD COLUMN parse_warnings TEXT");
+  const rows = await driver.query(`
+    SELECT captures.capture_id, documents.parser_output
+    FROM captures
+    JOIN documents ON documents.source_id = captures.source_id
+  `);
+  for (const row of rows) {
+    const output = parse<StoredDocument["parserOutput"]>(row.parser_output);
+    const warnings = (output?.parse.warnings ?? []).map(({ code, message, stage, recoverable }) => ({
+      code,
+      message,
+      stage,
+      recoverable,
+    }));
+    await driver.exec("UPDATE captures SET parse_warnings = ? WHERE capture_id = ?", [
+      JSON.stringify(warnings),
+      row.capture_id as string,
     ]);
   }
 }
@@ -208,6 +236,8 @@ function rowToCapture(row: Row): StoredCapture {
   if (stage !== undefined) capture.stage = stage as StoredCapture["stage"];
   const curationNote = text(row.curation_note);
   if (curationNote !== undefined) capture.curationNote = curationNote;
+  const parseWarnings = parse<StoredCapture["parseWarnings"]>(row.parse_warnings);
+  if (parseWarnings !== undefined) capture.parseWarnings = parseWarnings;
   const expandLinks = parse<string[]>(row.expand_links);
   if (expandLinks !== undefined) capture.expandLinks = expandLinks;
   if (row.attempts !== null && row.attempts !== undefined && Number(row.attempts) > 0) {
@@ -279,12 +309,13 @@ function rowToChunk(row: Row): StoredChunk {
 
 const CAPTURE_UPSERT = `
 INSERT INTO captures (capture_id, url, intent, status, stage, source_id, title,
-  curation_note, expand_links, attempts, archived, failure, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  curation_note, parse_warnings, expand_links, attempts, archived, failure, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(capture_id) DO UPDATE SET
   url = excluded.url, intent = excluded.intent, status = excluded.status,
   stage = excluded.stage, source_id = excluded.source_id, title = excluded.title,
-  curation_note = excluded.curation_note, expand_links = excluded.expand_links,
+  curation_note = excluded.curation_note, parse_warnings = excluded.parse_warnings,
+  expand_links = excluded.expand_links,
   attempts = excluded.attempts, archived = excluded.archived, failure = excluded.failure,
   created_at = excluded.created_at, updated_at = excluded.updated_at
 `;
@@ -311,7 +342,7 @@ function captureParams(capture: StoredCapture): SqlValue[] {
   return [
     capture.captureId, capture.url, capture.intent ?? null, capture.status,
     capture.stage ?? null, capture.sourceId ?? null, capture.title ?? null,
-    capture.curationNote ?? null, json(capture.expandLinks), capture.attempts ?? 0,
+    capture.curationNote ?? null, json(capture.parseWarnings), json(capture.expandLinks), capture.attempts ?? 0,
     capture.archived ? 1 : 0, json(capture.failure), capture.createdAt, capture.updatedAt,
   ];
 }

@@ -19,11 +19,20 @@ export const bilibiliAdapter: SourceAdapter = {
       });
       if (result?.ok) {
         if (result.degraded) {
-          
           const degradedNote =
-            result.degraded === "subtitle-fetch-failed"
-              ? "字幕文件下载失败：仅收录标题与简介，重试可重新获取字幕；完整字幕转写需要 helper"
-              : "该视频无字幕（含 AI 字幕）：仅收录标题与简介，完整字幕转写需要 helper";
+            result.degraded === "subtitle-login-required"
+              ? "字幕需要 B 站登录态：请登录后在当前视频页重试；本轮仅收录标题与简介"
+              : result.degraded === "subtitle-fetch-failed"
+                ? `字幕抓取失败：仅收录标题与简介；重试可重新获取字幕${
+                    result.degradedDetail ? `。原因：${result.degradedDetail}` : ""
+                  }`
+                : "该视频未提供字幕轨道：仅收录标题与简介";
+          const warningCode =
+            result.degraded === "subtitle-login-required"
+              ? "SUBTITLE_LOGIN_REQUIRED"
+              : result.degraded === "subtitle-fetch-failed"
+                ? "SUBTITLE_FETCH_FAILED"
+                : "NO_SUBTITLE_FALLBACK";
           const descriptionLines = (result.description ?? "")
             .split(/\n+/)
             .map((line) => line.trim())
@@ -47,10 +56,10 @@ export const bilibiliAdapter: SourceAdapter = {
             degradedNote,
             warnings: [
               {
-                code: result.degraded === "subtitle-fetch-failed" ? "SUBTITLE_FETCH_FAILED" : "NO_SUBTITLE_FALLBACK",
+                code: warningCode,
                 message: degradedNote,
                 stage: "extract",
-                recoverable: result.degraded === "subtitle-fetch-failed",
+                recoverable: result.degraded !== "no-subtitle",
               },
             ],
           };

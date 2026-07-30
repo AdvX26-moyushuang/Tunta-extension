@@ -268,6 +268,14 @@ export interface CaptureFailure {
   recoverable: boolean;
 }
 
+/** Parser 的非致命问题；独立于 AI 策展结论，避免抓取诊断被 curationNote 覆盖。 */
+export interface CaptureParseWarning {
+  code: string;
+  message: string;
+  stage: "fetch" | "extract" | "transcribe" | "ocr" | "normalize" | "store" | "unknown";
+  recoverable: boolean;
+}
+
 export interface CaptureItem {
   captureId: string;
   url: string;
@@ -281,6 +289,8 @@ export interface CaptureItem {
   failure: CaptureFailure | null;
   /** AI 策展 / 列表展开结论（如「不产卡片的原因」「已展开为 N 个子收藏」）；有卡片时为空 */
   curationNote?: string;
+  /** 抓取 / 解析链路的结构化非致命告警；不能被后续 AI 策展覆盖。 */
+  parseWarnings?: CaptureParseWarning[];
 }
 
 export interface SubmitCaptureRequest {
@@ -308,12 +318,7 @@ export interface PageSnapshotBlock {
   };
 }
 
-export interface PageSnapshotWarning {
-  code: string;
-  message: string;
-  stage: "fetch" | "extract" | "transcribe" | "ocr" | "normalize" | "store" | "unknown";
-  recoverable: boolean;
-}
+export interface PageSnapshotWarning extends CaptureParseWarning {}
 
 export interface PageSnapshot {
   finalUrl: string;
