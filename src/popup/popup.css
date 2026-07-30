@@ -26,25 +26,26 @@ body {
 }
 
 
+/* 与 workspace 同一套填充制控件（见 tokens.css --fill-control） */
 .popup .btn {
   min-height: 36px;
   padding: 8px 15px;
-  border: 1.5px solid var(--ink-soft);
+  border: 0;
   border-radius: var(--r-pill);
-  background: var(--paper-bright);
+  background: var(--fill-control);
   box-shadow: none;
-  color: var(--ink);
+  color: var(--brand-water-deep);
   font-size: var(--text-xs);
-  transition:
-    transform 150ms ease,
-    background 150ms ease,
-    box-shadow 150ms ease;
+  font-weight: 600;
+  transition: background 150ms ease;
 }
 
 .popup .btn:hover:not(:disabled) {
-  transform: translateY(-2px);
-  background: var(--brand-water-pale);
-  box-shadow: var(--lift);
+  background: var(--fill-control-hover);
+}
+
+.popup .btn:active:not(:disabled) {
+  background: var(--fill-control-active);
 }
 
 .popup .status-chip {
@@ -253,20 +254,17 @@ body {
   min-height: 42px;
   padding: 12px;
   cursor: pointer;
-  border: 1.5px solid var(--ink);
+  border: 0;
   border-radius: var(--r-pill);
   background: var(--brand-sun);
   color: var(--ink);
   font-size: var(--text-sm);
   font-weight: 700;
-  transition:
-    transform 150ms ease,
-    box-shadow 150ms ease;
+  transition: background 150ms ease;
 }
 
 .submit-button:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: var(--lift);
+  background: var(--brand-sun-pale);
 }
 
 .submit-button:disabled {
