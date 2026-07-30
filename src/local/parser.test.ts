@@ -397,6 +397,49 @@ test("uses a stable Xiaohongshu note id and marks incomplete media capture as pa
   assert.equal(output.parse.warnings[0]?.code, "XHS_MEDIA_NOT_CAPTURED");
 });
 
+test("carries OCR assets and asset_ids through the Parser Output boundary", async () => {
+  const output = await buildParserOutput({
+    originalUrl: "https://www.xiaohongshu.com/explore/64abcdef1234567890",
+    finalUrl: "https://www.xiaohongshu.com/explore/64abcdef1234567890",
+    title: "带图笔记",
+    platform: "xiaohongshu",
+    contentType: "image_post",
+    blocks: [
+      {
+        kind: "caption",
+        text: "公开可见的正文",
+        locator: { kind: "dom", selector: "#detail-desc .note-text" },
+      },
+      {
+        kind: "ocr",
+        text: "收纳流程图\n第一步：全部倒出来",
+        locator: { kind: "unknown" },
+        asset_ids: ["asset:image:001"],
+      },
+    ],
+    assets: [
+      {
+        asset_id: "asset:image:001",
+        kind: "image",
+        url: "https://sns-img.example.com/cover.webp",
+        blob_ref: null,
+        ocr_text: "第一步：全部倒出来",
+        caption: "收纳流程图",
+        metadata: {},
+      },
+    ],
+    jobId: "job:test:ocr",
+  });
+
+  assert.equal(output.assets.length, 1);
+  assert.equal(output.assets[0]?.ocr_text, "第一步：全部倒出来");
+  assert.equal(output.assets[0]?.caption, "收纳流程图");
+  const ocrBlock = output.blocks.find((block) => block.kind === "ocr");
+  assert.deepEqual(ocrBlock?.asset_ids, ["asset:image:001"]);
+  // 非 OCR block 不带 asset 引用
+  assert.deepEqual(output.blocks[0]?.asset_ids, []);
+});
+
 test("deduplicates repeated parser blocks at the Parser Output boundary", async () => {
   const output = await buildParserOutput({
     originalUrl: "https://example.com/repeated",

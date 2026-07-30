@@ -33,6 +33,7 @@ import {
   type StoredChunk,
   type StoredDocument,
 } from "./store";
+import { annotatePageImages } from "./ocr";
 import {
   buildParserOutput,
   isBilibiliListUrl,
@@ -530,17 +531,20 @@ export function createLocalApi(): TuntaApi {
         if (blocks.length === 0) {
           throw new ApiError("当前页快照为空：未能提取到正文内容。", 400, "SNAPSHOT_EMPTY");
         }
+        // 图片 OCR（opt-in）：失败只产生 warning，不阻断收藏
+        const ocr = await annotatePageImages(options.snapshot.images);
         const output = await buildParserOutput({
           originalUrl: url,
           finalUrl: options.snapshot.finalUrl || url,
           title: options.snapshot.title || url,
           platform: options.snapshot.platform || "web",
           contentType: toParserContentType(options.snapshot.contentType),
-          blocks,
+          blocks: [...blocks, ...ocr.blocks],
+          assets: ocr.assets,
           jobId: `job:${captureId}`,
           author: options.snapshot.author ?? null,
           publishedAt: options.snapshot.publishedAt ?? null,
-          warnings: toParserWarnings(options.snapshot),
+          warnings: [...toParserWarnings(options.snapshot), ...ocr.warnings],
         });
         const doc: StoredDocument = {
           sourceId: output.source.source_id,

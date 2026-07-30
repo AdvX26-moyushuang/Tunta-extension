@@ -1,4 +1,10 @@
-import { extractXiaohongshuSnapshot, isXiaohongshuUrl } from "../parser";
+import {
+  collectPageImages,
+  extractXiaohongshuSnapshot,
+  isXiaohongshuUrl,
+  type PageImageCapture,
+} from "../parser";
+import { loadSettings } from "../settings";
 import { SnapshotError, type AdapterContext, type SnapshotData, type SourceAdapter } from "./types";
 
 export const xiaohongshuAdapter: SourceAdapter = {
@@ -12,9 +18,23 @@ export const xiaohongshuAdapter: SourceAdapter = {
     if (!result) throw new SnapshotError("EXTRACT_NO_RESULT", "小红书页面提取脚本没有返回结果。");
     if (!result.ok) throw new SnapshotError(result.code, result.message);
 
+    // 图片 OCR（计划 §Task4.3）：opt-in 开启后才在页面上下文收集图片，
+    // 标注在入库前由 annotatePageImages 完成（见 src/local/ocr.ts）
+    const settings = await loadSettings();
+    let images: PageImageCapture[] | undefined;
+    if (settings.ocr.enabled && result.mediaCount > 0) {
+      const [{ result: collected }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: collectPageImages,
+      });
+      images = collected?.length ? collected : undefined;
+    }
+
     const degradedNote =
-      result.mediaCount > 0
-        ? "本轮只保存公开可见的标题、正文和作者；图片、视频下载与 OCR 尚未进入插件 local Parser"
+      result.mediaCount > 0 && !images
+        ? settings.ocr.enabled
+          ? "图片未能读取（跨域限制），本轮只保存标题、正文和作者"
+          : "图片未做 OCR：可在工作台设置页开启「图片 OCR」（图片会发送给你配置的 provider）"
         : undefined;
     return {
       finalUrl: result.canonicalUrl,
@@ -29,6 +49,7 @@ export const xiaohongshuAdapter: SourceAdapter = {
         locator: { kind: "dom" as const, selector: block.selector },
       })),
       listLinks: null,
+      ...(images ? { images } : {}),
       ...(degradedNote ? { degradedNote } : {}),
       warnings: degradedNote
         ? [

@@ -8,6 +8,7 @@ import {
   type StoredDocument,
 } from "./store";
 import { buildParserOutput, isXiaohongshuUrl, toCaptureParseWarnings } from "./parser";
+import { annotatePageImages } from "./ocr";
 import { callEmbedding, ProviderError } from "./provider";
 import { isEmbeddingConfigured, loadSettings, type LocalSettings } from "./settings";
 import { expandListCaptures } from "./expand";
@@ -202,18 +203,21 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
     if (!capture.stage) {
       capture = await save({ ...capture, status: "fetching", failure: null });
       const snapshot = await snapshotForUrl(capture.url, tabId);
+      // 图片 OCR（opt-in）：失败只产生 warning，不阻断收藏
+      const ocr = await annotatePageImages(snapshot.images);
       const output = await buildParserOutput({
         originalUrl: capture.url,
         finalUrl: snapshot.finalUrl,
         title: snapshot.title,
         platform: snapshot.platform,
         contentType: snapshot.contentType,
-        blocks: snapshot.blocks,
+        blocks: [...snapshot.blocks, ...ocr.blocks],
+        assets: ocr.assets,
         jobId: `job:${capture.captureId}`,
         author: snapshot.author ?? null,
         publishedAt: snapshot.publishedAt ?? null,
-        
-        warnings: snapshot.warnings,
+
+        warnings: [...snapshot.warnings, ...ocr.warnings],
       });
       const doc: StoredDocument = {
         sourceId: output.source.source_id,

@@ -1,4 +1,10 @@
-import type { ParserBlockKind, ParserContentType, ParserLocator, ParserProblem } from "../parser";
+import type {
+  PageImageCapture,
+  ParserBlockKind,
+  ParserContentType,
+  ParserLocator,
+  ParserProblem,
+} from "../parser";
 
 export class SnapshotError extends Error {
   constructor(
@@ -21,6 +27,8 @@ export interface SnapshotData {
   publishedAt?: string | null;
   listLinks: string[] | null;
   degradedNote?: string;
+  /** OCR 待处理图片（已在页面上下文缩放转 base64）；仅 OCR 开启时携带。 */
+  images?: PageImageCapture[];
   warnings: ParserProblem[];
 }
 

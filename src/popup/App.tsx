@@ -70,6 +70,7 @@ export function App() {
             ...(data.author ? { author: data.author } : {}),
             ...(data.publishedAt ? { publishedAt: data.publishedAt } : {}),
             ...(data.listLinks?.length ? { listLinks: data.listLinks } : {}),
+            ...(data.images?.length ? { images: data.images } : {}),
             ...(data.degradedNote ? { degradedNote: data.degradedNote } : {}),
             ...(data.warnings.length ? { warnings: data.warnings } : {}),
           };

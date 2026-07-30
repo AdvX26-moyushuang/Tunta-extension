@@ -52,6 +52,10 @@ export function SettingsPage({ onToast, onSaved }: { onToast: (message: string) 
     setEmbeddingTest(IDLE_TEST);
   }, []);
 
+  const updateOcr = useCallback((patch: Partial<LocalSettings["ocr"]>) => {
+    setSettings((current) => (current ? { ...current, ocr: { ...current.ocr, ...patch } } : current));
+  }, []);
+
   const save = useCallback(async () => {
     if (!settings) return;
     setSaving(true);
@@ -261,6 +265,22 @@ export function SettingsPage({ onToast, onSaved }: { onToast: (message: string) 
                 </div>
               </>
             )}
+          </section>
+
+          <section className="settings-section">
+            <h2>图片 OCR（可选）</h2>
+            <p className="settings-hint">
+              开启后，收藏图文笔记（如小红书）时会把页面图片缩小后发送给上方的卡片 / 问答
+              provider，识别图中文字并生成描述。图片会离开本机；需要多模态模型。默认关闭。
+            </p>
+            <label className="settings-field settings-checkbox">
+              <input
+                type="checkbox"
+                checked={settings.ocr.enabled}
+                onChange={(event) => updateOcr({ enabled: event.target.checked })}
+              />
+              <span>启用图片 OCR（图片将发送给你配置的 provider）</span>
+            </label>
           </section>
 
           <section className="settings-section">

@@ -94,6 +94,46 @@ export interface ParserOutput {
 // 通用正文提取已换成 Readability（计划 §Task4.1）：页面只抓 outerHTML，
 // 解析在 offscreen 跑，见 src/offscreen/readability.ts。
 
+export interface PageImageCapture {
+  url: string;
+  /** data:image/jpeg;base64,… 形式，最长边已在页面上下文缩到 1024px。 */
+  dataUrl: string;
+}
+
+/**
+ * 页面图片收集（计划 §Task4.3）：必须在页面上下文缩放后转 base64——
+ * 不缩放会撑爆 executeScript 的消息大小限制，且平台图片常需要页面的
+ * cookie/referer 才能取到。注入函数，闭包会丢失：不得引用外部变量。
+ */
+export function collectPageImages(): PageImageCapture[] {
+  const MAX_IMAGES = 4;
+  const MAX_SIDE = 1024;
+  const MIN_SIDE = 200;
+  const results: PageImageCapture[] = [];
+  const seen = new Set<string>();
+  for (const img of Array.from(document.querySelectorAll("img"))) {
+    if (results.length >= MAX_IMAGES) break;
+    const src = img.currentSrc || img.src;
+    // 小图多为头像/图标，不值得花 OCR 预算
+    if (!src || seen.has(src) || img.naturalWidth < MIN_SIDE || img.naturalHeight < MIN_SIDE) continue;
+    seen.add(src);
+    const scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) continue;
+    try {
+      context.drawImage(img, 0, 0, canvas.width, canvas.height);
+      // 无 CORS 头的跨域图片会污染 canvas，toDataURL 抛 SecurityError：跳过该图
+      results.push({ url: src, dataUrl: canvas.toDataURL("image/jpeg", 0.8) });
+    } catch {
+      continue;
+    }
+  }
+  return results;
+}
+
 export interface XiaohongshuSnapshotBlock {
   kind: "heading" | "caption";
   text: string;
@@ -738,11 +778,13 @@ interface BuildInput {
   title: string;
   platform: string;
   contentType: ParserContentType;
-  blocks: { kind: ParserBlockKind; text: string; locator: ParserLocator }[];
+  blocks: { kind: ParserBlockKind; text: string; locator: ParserLocator; asset_ids?: string[] }[];
   jobId: string;
   author?: string | null;
   publishedAt?: string | null;
   warnings?: ParserProblem[];
+  /** 图片 OCR 等多模态产物（计划 §Task4.3），blocks 通过 asset_ids 引用。 */
+  assets?: ParserAsset[];
 }
 
 function normalizedBlockText(text: string): string {
@@ -811,10 +853,10 @@ export async function buildParserOutput(input: BuildInput): Promise<ParserOutput
       text: block.text,
       parent_block_id: null,
       locator: block.locator,
-      asset_ids: [],
+      asset_ids: block.asset_ids ?? [],
       metadata: {},
     })),
-    assets: [],
+    assets: input.assets ?? [],
     parse: {
       job_id: input.jobId,
       parser_name: "extension-snapshot",

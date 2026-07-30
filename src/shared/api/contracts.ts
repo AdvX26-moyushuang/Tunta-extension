@@ -341,6 +341,8 @@ export interface PageSnapshot {
   listLinks?: string[];
   /** 降级说明（如无字幕视频仅收录标题+简介）：标记需要 helper */
   degradedNote?: string;
+  /** OCR 待处理图片（已在页面上下文缩放转 base64）；仅图片 OCR 开启时携带。 */
+  images?: { url: string; dataUrl: string }[];
   /** Parser 可消费但不完整时的结构化 warning；入库后 parse.status 为 partial。 */
   warnings?: PageSnapshotWarning[];
 }
