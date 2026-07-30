@@ -39,6 +39,7 @@ pnpm-debug.log*
 .vscode/
 !.vscode/extensions.json
 .idea/
+.claude/launch.json
 *.swp
 *.swo
 
