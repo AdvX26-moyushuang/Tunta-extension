@@ -197,6 +197,7 @@ async function buildLibrary(): Promise<LibraryResponse> {
     domainLabels: card.domainLabels,
     evidence: card.evidence,
     source: sourceById.get(card.sourceId),
+    createdAt: card.createdAt,
   }));
 
   const nodes: LibraryGraphNode[] = [];
@@ -375,9 +376,6 @@ export function createLocalApi(): TuntaApi {
           url: doc.url,
           cardCount: cardCountBySource.get(doc.sourceId) ?? 0,
         })),
-        
-
-
         edges: edges.filter((edge) => known.has(edge.fromSourceId) && known.has(edge.toSourceId)),
       };
     },

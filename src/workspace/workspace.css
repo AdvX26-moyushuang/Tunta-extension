@@ -773,6 +773,178 @@ body {
   white-space: nowrap;
 }
 
+/* ---------- Library 三 tab（计划 §Task5.2）：卡片流 / 来源 / 处理状态 ---------- */
+
+.library-tabs {
+  margin-top: 0;
+}
+
+.library-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.filter-chip {
+  padding: 6px 12px;
+  cursor: pointer;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  box-shadow: var(--outline-control-strong);
+  color: var(--ink);
+  font-size: var(--text-xs);
+}
+
+.filter-chip.active {
+  background: var(--brand-water);
+  box-shadow: var(--outline-selected);
+  color: white;
+}
+
+.library-label-select {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  background: var(--paper-bright);
+  color: var(--ink);
+  font-size: var(--text-xs);
+}
+
+.library-hidden-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.card-feed {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+.knowledge-card.card-is-hidden {
+  opacity: 0.55;
+}
+
+.card-feed-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.card-star-badge {
+  color: var(--brand-sun);
+  font-size: var(--text-sm);
+}
+
+.card-user-note {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--brand-sun);
+  background: rgba(255, 250, 242, 0.82);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+
+.card-note-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.card-note-editor textarea {
+  padding: 8px 10px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--paper-bright);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  resize: vertical;
+}
+
+.card-note-editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.source-list {
+  display: grid;
+  gap: 10px;
+}
+
+.source-row {
+  display: grid;
+  gap: 4px;
+  padding: 14px 18px;
+  cursor: pointer;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--paper-bright);
+  box-shadow: var(--outline-control-strong);
+  text-align: left;
+}
+
+.source-row:hover {
+  box-shadow: var(--outline-selected);
+}
+
+.source-row-title {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.source-row-meta {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.source-detail-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.source-detail-head h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.source-section-title {
+  margin: 22px 0 10px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.source-blocks {
+  display: grid;
+  gap: 10px;
+  max-width: 760px;
+}
+
+.source-block {
+  margin: 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--line-strong);
+  background: var(--paper-bright);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+}
+
 .card-actions {
   position: relative;
   z-index: 2;

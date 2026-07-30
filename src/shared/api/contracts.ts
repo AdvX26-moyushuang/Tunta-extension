@@ -143,6 +143,8 @@ export interface LibraryCard {
   domainLabels: string[];
   evidence: { blockId: string; quote?: string | null }[];
   source?: LibrarySource;
+  /** 卡片创建时间（ISO）；卡片流按此倒序。旧 mock 种子数据可能缺失。 */
+  createdAt?: string;
 }
 
 export interface LibraryGraphNode {
