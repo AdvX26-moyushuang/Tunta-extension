@@ -11,6 +11,7 @@ import {
   type EmbeddingModelInfo,
   type StoredCapture,
   type StoredCard,
+  type StoredCardState,
   type StoredChatTurn,
   type StoredChunk,
   type StoredDocument,
@@ -24,7 +25,7 @@ import {
 } from "./types";
 
 const DB_NAME = "tunta-local";
-const DB_VERSION = 9;
+const DB_VERSION = 10;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -74,6 +75,10 @@ function openDb(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains("edge_explanations")) {
           db.createObjectStore("edge_explanations", { keyPath: "edgeId" });
         }
+        if (!db.objectStoreNames.contains("card_states")) {
+          // 与 SQL 的 card_states 对齐（计划 §Task5.2）：独立于 cards，策展重跑不碰
+          db.createObjectStore("card_states", { keyPath: "cardId" });
+        }
         const cards = request.transaction?.objectStore("cards");
         if (cards) {
           const seenCards = new Set<string>();
@@ -106,7 +111,7 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-type StoreName = "captures" | "documents" | "cards" | "chat_history" | "kaleidoscope_edges" | "embeddings" | "chunks" | "entities" | "mentions" | "entity_edges" | "edge_explanations";
+type StoreName = "captures" | "documents" | "cards" | "card_states" | "chat_history" | "kaleidoscope_edges" | "embeddings" | "chunks" | "entities" | "mentions" | "entity_edges" | "edge_explanations";
 
 async function withStore<T>(store: StoreName, mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const db = await openDb();
@@ -228,6 +233,21 @@ export class IdbStore implements TuntaStore {
   /** 迁移完成前的退路：全量拉卡后跑 JS BM25，与 SqlCore 的 FTS5 路径语义对齐。 */
   async searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]> {
     return searchCardsByBm25(await this.listCards(), query, limit);
+  }
+
+  // card states（计划 §Task5.2）：独立 object store，replaceCardsForSource 天然不碰
+
+  async listCardStates(): Promise<StoredCardState[]> {
+    const all = await getAll<StoredCardState>("card_states");
+    return all.sort((a, b) => a.cardId.localeCompare(b.cardId));
+  }
+
+  getCardState(cardId: string): Promise<StoredCardState | undefined> {
+    return withStore("card_states", "readonly", (s) => s.get(cardId));
+  }
+
+  putCardState(state: StoredCardState): Promise<StoredCardState> {
+    return withStore("card_states", "readwrite", (s) => s.put(state)).then(() => state);
   }
 
   // chunks（计划 §Task2.3）
@@ -469,10 +489,11 @@ export class IdbStore implements TuntaStore {
   async clearAllLocalData(): Promise<void> {
     const db = await openDb();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(["captures", "documents", "cards", "chat_history", "kaleidoscope_edges", "embeddings", "chunks", "entities", "mentions", "entity_edges", "edge_explanations"], "readwrite");
+      const tx = db.transaction(["captures", "documents", "cards", "card_states", "chat_history", "kaleidoscope_edges", "embeddings", "chunks", "entities", "mentions", "entity_edges", "edge_explanations"], "readwrite");
       tx.objectStore("captures").clear();
       tx.objectStore("documents").clear();
       tx.objectStore("cards").clear();
+      tx.objectStore("card_states").clear();
       tx.objectStore("chat_history").clear();
       tx.objectStore("kaleidoscope_edges").clear();
       tx.objectStore("embeddings").clear();

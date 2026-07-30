@@ -3,6 +3,7 @@ import type {
   BackendStatus,
   CaptureIntent,
   CaptureItem,
+  CardStateInfo,
   ChatHistoryEntry,
   ChatTurn,
   ConfirmProposalResponse,
@@ -19,6 +20,7 @@ import type {
   ReviewQueueResponse,
   SubmitCaptureRequest,
   SubmitCaptureResult,
+  UpdateCardStateRequest,
 } from "@/shared/api/contracts";
 import { isExtensionContext } from "@/shared/browser";
 import { normalizeUrl } from "@/shared/format";
@@ -30,6 +32,7 @@ import { explainEdgeRelation, rebuildKnowledgeGraph } from "./kaleidoscope";
 import {
   getStore,
   type StoredCapture,
+  type StoredCardState,
   type StoredChunk,
   type StoredDocument,
 } from "./store";
@@ -338,6 +341,23 @@ export function createLocalApi(): TuntaApi {
     },
 
     getLibrary: () => buildLibrary(),
+
+    // StoredCardState 与 CardStateInfo 字段同构，直接透传
+    listCardStates: (): Promise<CardStateInfo[]> => getStore().listCardStates(),
+
+    updateCardState: async (cardId: string, patch: UpdateCardStateRequest): Promise<CardStateInfo> => {
+      const existing = await getStore().getCardState(cardId);
+      const next: StoredCardState = {
+        cardId,
+        starred: patch.starred ?? existing?.starred ?? false,
+        hidden: patch.hidden ?? existing?.hidden ?? false,
+        userNote: patch.userNote === undefined ? (existing?.userNote ?? null) : patch.userNote,
+        reviewCount: existing?.reviewCount ?? 0,
+        lastReviewedAt: existing?.lastReviewedAt ?? null,
+        updatedAt: nowIso(),
+      };
+      return getStore().putCardState(next);
+    },
 
     getKaleidoscope: async (): Promise<KaleidoscopeGraph> => {
       const [documents, cards, edges] = await Promise.all([getStore().listDocuments(), getStore().listCards(), getStore().listKaleidoscopeEdges()]);

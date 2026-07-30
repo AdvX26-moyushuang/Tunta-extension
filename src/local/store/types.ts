@@ -36,6 +36,21 @@ export interface StoredCard {
   createdAt: string;
 }
 
+/**
+ * 卡片上的用户状态（计划 §Task5.2，表在 §Task1.6 已建）。
+ * 与卡片本体分离：不参与 replaceCardsForSource，策展重跑不抹用户笔记；
+ * 无级联删除，孤儿行原样保留（cardId 内容派生，内容未变时状态不错位）。
+ */
+export interface StoredCardState {
+  cardId: string;
+  starred: boolean;
+  hidden: boolean;
+  userNote: string | null;
+  reviewCount: number;
+  lastReviewedAt: string | null;
+  updatedAt: string;
+}
+
 // ---- 实体（计划 §Task3.1） ----
 
 /** 实体类型限死六个值，越界的在抽取清洗阶段丢弃。 */
@@ -385,6 +400,11 @@ export interface TuntaStore {
   listCardsBySource(sourceId: string): Promise<StoredCard[]>;
   /** FTS 检索（计划 §Task2.1）：SQL 实现走 FTS5 bm25，其余实现走等价 JS BM25。 */
   searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]>;
+
+  // card states（计划 §Task5.2）：用户状态层，语义红线见 StoredCardState 注释
+  listCardStates(): Promise<StoredCardState[]>;
+  getCardState(cardId: string): Promise<StoredCardState | undefined>;
+  putCardState(state: StoredCardState): Promise<StoredCardState>;
 
   // chunks（计划 §Task2.3）
   replaceChunksForSource(sourceId: string, chunks: StoredChunk[]): Promise<void>;

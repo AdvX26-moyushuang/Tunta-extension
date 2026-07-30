@@ -11,6 +11,7 @@ import {
   type EmbeddingModelInfo,
   type StoredCapture,
   type StoredCard,
+  type StoredCardState,
   type StoredChatTurn,
   type StoredChunk,
   type StoredDocument,
@@ -36,6 +37,7 @@ export class MemoryStore implements TuntaStore {
   private captures = new Map<string, StoredCapture>();
   private documents = new Map<string, StoredDocument>();
   private cards = new Map<string, StoredCard>();
+  private cardStates = new Map<string, StoredCardState>();
   private chatTurns = new Map<string, StoredChatTurn>();
   private kaleidoscopeEdges = new Map<string, StoredKaleidoscopeEdge>();
   private embeddings = new Map<string, StoredEmbedding>();
@@ -121,6 +123,22 @@ export class MemoryStore implements TuntaStore {
 
   async searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]> {
     return searchCardsByBm25([...this.cards.values()], query, limit);
+  }
+
+  // card states（计划 §Task5.2）：与 cards 分开存，replaceCardsForSource 天然不碰
+
+  async listCardStates(): Promise<StoredCardState[]> {
+    return [...this.cardStates.values()].map(clone).sort((a, b) => a.cardId.localeCompare(b.cardId));
+  }
+
+  async getCardState(cardId: string): Promise<StoredCardState | undefined> {
+    const found = this.cardStates.get(cardId);
+    return found ? clone(found) : undefined;
+  }
+
+  async putCardState(state: StoredCardState): Promise<StoredCardState> {
+    this.cardStates.set(state.cardId, clone(state));
+    return state;
   }
 
   // chunks
@@ -268,6 +286,7 @@ export class MemoryStore implements TuntaStore {
     this.captures.clear();
     this.documents.clear();
     this.cards.clear();
+    this.cardStates.clear();
     this.chatTurns.clear();
     this.kaleidoscopeEdges.clear();
     this.embeddings.clear();

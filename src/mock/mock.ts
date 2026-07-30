@@ -14,6 +14,7 @@ import type {
   BackendStatus,
   CaptureIntent,
   CaptureItem,
+  CardStateInfo,
   ChatHistoryEntry,
   ChatTurn,
   ConfirmProposalResponse,
@@ -256,6 +257,7 @@ export function createMockApi(): TuntaApi {
   let library = buildLibrary();
   let kaleidoscope = buildKaleidoscope();
   const captures = seedCaptures();
+  const cardStates = new Map<string, CardStateInfo>();
   const reviewSeen = new Set<string>();
   const dismissedProposals = new Set<string>();
   const chatHistory: { entry: ChatHistoryEntry; turn: ChatTurn }[] = [];
@@ -352,6 +354,23 @@ export function createMockApi(): TuntaApi {
       }),
 
     getLibrary: () => delay(structuredClone(library)),
+
+    listCardStates: () => delay([...cardStates.values()].map((state) => ({ ...state }))),
+
+    updateCardState: (cardId, patch) => {
+      const existing = cardStates.get(cardId);
+      const next: CardStateInfo = {
+        cardId,
+        starred: patch.starred ?? existing?.starred ?? false,
+        hidden: patch.hidden ?? existing?.hidden ?? false,
+        userNote: patch.userNote === undefined ? (existing?.userNote ?? null) : patch.userNote,
+        reviewCount: existing?.reviewCount ?? 0,
+        lastReviewedAt: existing?.lastReviewedAt ?? null,
+        updatedAt: nowIso(),
+      };
+      cardStates.set(cardId, next);
+      return delay({ ...next });
+    },
 
     getKaleidoscope: () => delay(structuredClone(kaleidoscope)),
 
@@ -491,6 +510,7 @@ export function createMockApi(): TuntaApi {
       library = { sources: [], cards: [], nodes: [], edges: [] };
       kaleidoscope = { nodes: [], edges: [] };
       captures.length = 0;
+      cardStates.clear();
       chatHistory.length = 0;
       reviewSeen.clear();
       dismissedProposals.clear();

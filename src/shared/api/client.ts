@@ -13,6 +13,7 @@ import type {
   BackendStatus,
   CaptureIntent,
   CaptureItem,
+  CardStateInfo,
   ChatHistoryEntry,
   ChatTurn,
   ConfirmProposalRequest,
@@ -26,6 +27,7 @@ import type {
   ReviewQueueResponse,
   SubmitCaptureRequest,
   SubmitCaptureResult,
+  UpdateCardStateRequest,
 } from "./contracts";
 
 /**
@@ -43,6 +45,10 @@ export interface TuntaApi {
   getStatus(): Promise<BackendStatus>;
   /** GET /api/library */
   getLibrary(): Promise<LibraryResponse>;
+  /** GET /api/card-states —— 卡片用户状态全量（n 小，前端自行 join 卡片流，计划 §Task5.2） */
+  listCardStates(): Promise<CardStateInfo[]>;
+  /** POST /api/cards/{id}/state —— star/隐藏/笔记的部分更新，返回合并后全量状态 */
+  updateCardState(cardId: string, patch: UpdateCardStateRequest): Promise<CardStateInfo>;
   /** GET /api/kaleidoscope —— 万花筒知识图谱（来源节点 + 实体共现关联边） */
   getKaleidoscope(): Promise<KaleidoscopeGraph>;
   /** POST /api/kaleidoscope/rebuild —— 实体共现纯计算重建（零 provider 调用） */
@@ -117,6 +123,12 @@ export function createRealApi(baseUrl: string): TuntaApi {
   return {
     getStatus: () => request<BackendStatus>("/api/status"),
     getLibrary: () => request<LibraryResponse>("/api/library"),
+    listCardStates: () => request<CardStateInfo[]>("/api/card-states"),
+    updateCardState: (cardId, patch) =>
+      request<CardStateInfo>(`/api/cards/${encodeURIComponent(cardId)}/state`, {
+        method: "POST",
+        body: JSON.stringify(patch),
+      }),
     getKaleidoscope: () => request<KaleidoscopeGraph>("/api/kaleidoscope"),
     rebuildKaleidoscope: () =>
       request<KaleidoscopeRebuildResult>("/api/kaleidoscope/rebuild", { method: "POST" }),

@@ -6,6 +6,7 @@ import type {
   EmbeddingModelInfo,
   StoredCapture,
   StoredCard,
+  StoredCardState,
   StoredChatTurn,
   StoredChunk,
   StoredDocument,
@@ -83,6 +84,18 @@ export class SqliteStore implements TuntaStore {
 
   searchCardsFts(query: string, limit: number): Promise<CardFtsHit[]> {
     return call("searchCardsFts", [query, limit]);
+  }
+
+  listCardStates(): Promise<StoredCardState[]> {
+    return call("listCardStates", []);
+  }
+
+  getCardState(cardId: string): Promise<StoredCardState | undefined> {
+    return call("getCardState", [cardId]);
+  }
+
+  putCardState(state: StoredCardState): Promise<StoredCardState> {
+    return call("putCardState", [state]);
   }
 
   replaceChunksForSource(sourceId: string, chunks: StoredChunk[]): Promise<void> {

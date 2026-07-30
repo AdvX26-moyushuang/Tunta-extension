@@ -565,7 +565,31 @@ for (const impl of implementations) {
     assert.deepEqual(await store.getEdgeExplanation("kedge:s1::s2"), updated);
   });
 
-  test(`[${impl.name}] clearAllLocalData：十一张表全部清空`, async () => {
+  test(`[${impl.name}] card_states：往返、覆盖与策展重跑不丢状态`, async () => {
+    const store = impl.create();
+    assert.equal(await store.getCardState("card:a"), undefined);
+    assert.deepEqual(await store.listCardStates(), []);
+
+    const state = {
+      cardId: "card:a", starred: true, hidden: false, userNote: "我的笔记",
+      reviewCount: 0, lastReviewedAt: null, updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    assert.deepEqual(await store.putCardState(state), state);
+    assert.deepEqual(await store.getCardState("card:a"), state);
+
+    // 同 cardId 覆盖更新
+    const updated = { ...state, starred: false, hidden: true, userNote: null, updatedAt: "2026-02-01T00:00:00.000Z" };
+    await store.putCardState(updated);
+    assert.deepEqual(await store.getCardState("card:a"), updated);
+
+    // 语义红线：策展重跑（replaceCardsForSource）不碰用户状态，孤儿行也保留
+    await store.putDocument(makeDocument("src-1"));
+    await store.putCards([makeCard({ cardId: "card:a", sourceId: "src-1" })]);
+    await store.replaceCardsForSource("src-1", [makeCard({ cardId: "card:b", sourceId: "src-1" })]);
+    assert.deepEqual(await store.listCardStates(), [updated]);
+  });
+
+  test(`[${impl.name}] clearAllLocalData：十二张表全部清空`, async () => {
     const store = impl.create();
     await store.putCapture(makeCapture({ captureId: "c1", url: "https://a.com" }));
     await store.putDocument(makeDocument("src-1"));
@@ -579,6 +603,10 @@ for (const impl of implementations) {
     await store.putEmbeddings([makeEmbedding({ ownerId: "card:1", vector: [1, 0] })]);
     await store.replaceChunksForSource("src-1", [makeChunk("chunk:src-1:000", "src-1")]);
     await store.putEdgeExplanation({ edgeId: "kedge:s1::s2", explanation: "测试解释", createdAt: "2026-01-01T00:00:00.000Z" });
+    await store.putCardState({
+      cardId: "card:1", starred: true, hidden: false, userNote: null,
+      reviewCount: 0, lastReviewedAt: null, updatedAt: "2026-01-01T00:00:00.000Z",
+    });
 
     await store.clearAllLocalData();
     assert.equal((await store.listCaptures()).length, 0);
@@ -593,10 +621,12 @@ for (const impl of implementations) {
     assert.deepEqual(await store.listMentions(), []);
     assert.deepEqual(await store.listEntityEdges(), []);
     assert.equal(await store.getEdgeExplanation("kedge:s1::s2"), undefined);
+    assert.deepEqual(await store.listCardStates(), []);
   });
 }
 
-// ---- card_states（计划 §Task1.6）：SqlCore 专属，不在 TuntaStore 契约面内 ----
+// ---- card_states 表级语义（计划 §Task1.6）：读写面已入 TuntaStore 契约（§Task5.2），
+// 这里用 SQL 直写验证建表层面的孤儿行保留与 schema 版本 ----
 
 test("card_states：策展重跑（replaceCardsForSource）不影响用户状态", async () => {
   const driver = createNodeDriver();

@@ -168,6 +168,27 @@ export interface LibraryResponse {
   edges: LibraryGraphEdge[];
 }
 
+/**
+ * 卡片上的用户状态（计划 §Task5.2）：star/隐藏/笔记。App 产品数据，
+ * 与卡片本体分离：策展重跑不丢状态（cardId 内容派生保证不错位）。
+ */
+export interface CardStateInfo {
+  cardId: string;
+  starred: boolean;
+  hidden: boolean;
+  userNote: string | null;
+  reviewCount: number;
+  lastReviewedAt: string | null;
+  updatedAt: string;
+}
+
+/** 部分更新：未传字段保持原值；userNote 传 null 表示清空笔记。 */
+export interface UpdateCardStateRequest {
+  starred?: boolean;
+  hidden?: boolean;
+  userNote?: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Kaleidoscope 万花筒（App 级知识图谱：来源之间的实体共现关联）
 // ---------------------------------------------------------------------------

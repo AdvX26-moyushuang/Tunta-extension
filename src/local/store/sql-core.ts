@@ -8,6 +8,7 @@ import {
   type EmbeddingModelInfo,
   type StoredCapture,
   type StoredCard,
+  type StoredCardState,
   type StoredChatTurn,
   type StoredChunk,
   type StoredDocument,
@@ -413,6 +414,18 @@ function rowToMention(row: Row): StoredMention {
   };
 }
 
+function rowToCardState(row: Row): StoredCardState {
+  return {
+    cardId: row.card_id as string,
+    starred: Number(row.starred) === 1,
+    hidden: Number(row.hidden) === 1,
+    userNote: (row.user_note as string | null) ?? null,
+    reviewCount: Number(row.review_count),
+    lastReviewedAt: (row.last_reviewed_at as string | null) ?? null,
+    updatedAt: row.updated_at as string,
+  };
+}
+
 const CAPTURE_UPSERT = `
 INSERT INTO captures (capture_id, url, intent, status, stage, source_id, title,
   curation_note, parse_warnings, expand_links, attempts, archived, failure, created_at, updated_at)
@@ -596,6 +609,31 @@ export class SqlCore implements TuntaStore {
       [match, limit],
     );
     return rows.map((row) => ({ cardId: row.card_id as string, score: Number(row.score) }));
+  }
+
+  // card states（计划 §Task5.2）：表在 §Task1.6 已建，这里只接读写面
+
+  async listCardStates(): Promise<StoredCardState[]> {
+    return (await this.rows("SELECT * FROM card_states ORDER BY card_id")).map(rowToCardState);
+  }
+
+  async getCardState(cardId: string): Promise<StoredCardState | undefined> {
+    const rows = await this.rows("SELECT * FROM card_states WHERE card_id = ?", [cardId]);
+    return rows[0] ? rowToCardState(rows[0]) : undefined;
+  }
+
+  async putCardState(state: StoredCardState): Promise<StoredCardState> {
+    await this.run(
+      `INSERT INTO card_states (card_id, starred, hidden, user_note, review_count, last_reviewed_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(card_id) DO UPDATE SET
+         starred = excluded.starred, hidden = excluded.hidden, user_note = excluded.user_note,
+         review_count = excluded.review_count, last_reviewed_at = excluded.last_reviewed_at,
+         updated_at = excluded.updated_at`,
+      [state.cardId, state.starred ? 1 : 0, state.hidden ? 1 : 0, state.userNote,
+       state.reviewCount, state.lastReviewedAt, state.updatedAt],
+    );
+    return state;
   }
 
   // chunks（计划 §Task2.3）
