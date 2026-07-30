@@ -7,6 +7,7 @@ import type {
   ChatHistoryEntry,
   ChatTurn,
   ConfirmProposalResponse,
+  EntityMentionInfo,
   KaleidoscopeEdgeExplanation,
   KaleidoscopeGraph,
   KaleidoscopeRebuildResult,
@@ -358,6 +359,26 @@ export function createLocalApi(): TuntaApi {
         updatedAt: nowIso(),
       };
       return getStore().putCardState(next);
+    },
+
+    listEntityMentions: async (): Promise<EntityMentionInfo[]> => {
+      const [entities, mentions] = await Promise.all([getStore().listEntities(), getStore().listMentions()]);
+      const byId = new Map(entities.map((entity) => [entity.entityId, entity]));
+      return mentions.flatMap((mention) => {
+        let entity = byId.get(mention.entityId);
+        // 软合并（canonicalId 非空）归到 canonical 名下；孤儿 mention 直接丢弃
+        if (entity?.canonicalId) entity = byId.get(entity.canonicalId) ?? entity;
+        if (!entity) return [];
+        return [{
+          entityId: entity.entityId,
+          entityName: entity.name,
+          entityType: entity.type,
+          isHub: entity.isHub,
+          cardId: mention.cardId,
+          sourceId: mention.sourceId,
+          blockId: mention.blockId,
+        }];
+      });
     },
 
     getKaleidoscope: async (): Promise<KaleidoscopeGraph> => {

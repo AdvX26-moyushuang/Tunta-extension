@@ -18,6 +18,7 @@ import type {
   ChatTurn,
   ConfirmProposalRequest,
   ConfirmProposalResponse,
+  EntityMentionInfo,
   KaleidoscopeEdgeExplanation,
   KaleidoscopeGraph,
   KaleidoscopeRebuildResult,
@@ -49,6 +50,8 @@ export interface TuntaApi {
   listCardStates(): Promise<CardStateInfo[]>;
   /** POST /api/cards/{id}/state —— star/隐藏/笔记的部分更新，返回合并后全量状态 */
   updateCardState(cardId: string, patch: UpdateCardStateRequest): Promise<CardStateInfo>;
+  /** GET /api/entity-mentions —— 实体 mention 全量（n 小，前端自行 join 卡片，计划 §Task5.3） */
+  listEntityMentions(): Promise<EntityMentionInfo[]>;
   /** GET /api/kaleidoscope —— 万花筒知识图谱（来源节点 + 实体共现关联边） */
   getKaleidoscope(): Promise<KaleidoscopeGraph>;
   /** POST /api/kaleidoscope/rebuild —— 实体共现纯计算重建（零 provider 调用） */
@@ -129,6 +132,7 @@ export function createRealApi(baseUrl: string): TuntaApi {
         method: "POST",
         body: JSON.stringify(patch),
       }),
+    listEntityMentions: () => request<EntityMentionInfo[]>("/api/entity-mentions"),
     getKaleidoscope: () => request<KaleidoscopeGraph>("/api/kaleidoscope"),
     rebuildKaleidoscope: () =>
       request<KaleidoscopeRebuildResult>("/api/kaleidoscope/rebuild", { method: "POST" }),

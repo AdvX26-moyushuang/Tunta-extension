@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import cytoscape from "cytoscape";
 import { getApi } from "@/shared/api";
-import type { KaleidoscopeEdge, KaleidoscopeGraph, KaleidoscopeNode } from "@/shared/api/contracts";
+import type {
+  EntityMentionInfo,
+  KaleidoscopeEdge,
+  KaleidoscopeGraph,
+  KaleidoscopeNode,
+  LibraryCard,
+  LibraryResponse,
+} from "@/shared/api/contracts";
+import { openExternal } from "@/shared/browser";
+import { KnowledgeCard } from "@/shared/components/KnowledgeCard";
 
 interface KaleidoscopePageProps {
   onToast: (message: string) => void;
@@ -17,6 +26,9 @@ interface KaleidoscopePageProps {
 export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
   const [graph, setGraph] = useState<KaleidoscopeGraph | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [library, setLibrary] = useState<LibraryResponse | null>(null);
+  const [mentions, setMentions] = useState<EntityMentionInfo[]>([]);
   const [rebuilding, setRebuilding] = useState(false);
   const [explanations, setExplanations] = useState<Record<string, string>>({});
   const [explainingEdgeId, setExplainingEdgeId] = useState<string | null>(null);
@@ -24,8 +36,15 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const data = await getApi().getKaleidoscope();
+      // 实体侧栏（计划 §Task5.3）需要 mention 与卡片内容，随图一并拉取
+      const [data, lib, mentionList] = await Promise.all([
+        getApi().getKaleidoscope(),
+        getApi().getLibrary(),
+        getApi().listEntityMentions(),
+      ]);
       setGraph(data);
+      setLibrary(lib);
+      setMentions(mentionList);
     } catch (error) {
       onToast(`万花筒加载失败：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -140,14 +159,72 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
     });
     cy.on("tap", "node", (event) => {
       setSelectedId(String(event.target.id()));
+      setSelectedEntityId(null);
     });
     cy.on("tap", (event) => {
-      if (event.target === cy) setSelectedId(null);
+      if (event.target !== cy) return;
+      setSelectedId(null);
+      setSelectedEntityId(null);
     });
     return () => cy.destroy();
   }, [graph]);
 
   const selected: KaleidoscopeNode | null = graph?.nodes.find((node) => node.sourceId === selectedId) ?? null;
+
+  const cardById = useMemo(
+    () => new Map((library?.cards ?? []).map((card) => [card.cardId, card])),
+    [library],
+  );
+
+  /** 选中来源提及的实体（去重），附全库 mention 数；hub 降权排后。 */
+  const sourceEntities = useMemo(() => {
+    if (!selected) return [];
+    const globalCount = new Map<string, number>();
+    for (const mention of mentions) {
+      globalCount.set(mention.entityId, (globalCount.get(mention.entityId) ?? 0) + 1);
+    }
+    const seen = new Map<string, EntityMentionInfo>();
+    for (const mention of mentions) {
+      if (mention.sourceId !== selected.sourceId) continue;
+      if (!seen.has(mention.entityId)) seen.set(mention.entityId, mention);
+    }
+    return [...seen.values()]
+      .map((entity) => ({ entity, count: globalCount.get(entity.entityId) ?? 0 }))
+      .sort((a, b) => Number(a.entity.isHub) - Number(b.entity.isHub) || b.count - a.count);
+  }, [selected, mentions]);
+
+  /** 选中实体的全部 mention：按来源分组，组内按卡片时间倒序，组间按最新卡倒序。 */
+  const entityGroups = useMemo(() => {
+    if (!selectedEntityId) return [];
+    const bySource = new Map<string, LibraryCard[]>();
+    for (const mention of mentions) {
+      if (mention.entityId !== selectedEntityId) continue;
+      const card = cardById.get(mention.cardId);
+      if (!card) continue;
+      const list = bySource.get(mention.sourceId) ?? [];
+      list.push(card);
+      bySource.set(mention.sourceId, list);
+    }
+    return [...bySource.entries()]
+      .map(([sourceId, cards]) => {
+        const sorted = [...cards].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+        return { sourceId, cards: sorted, latest: sorted[0]?.createdAt ?? "" };
+      })
+      .sort((a, b) => b.latest.localeCompare(a.latest));
+  }, [selectedEntityId, mentions, cardById]);
+
+  const selectedEntity = selectedEntityId
+    ? mentions.find((mention) => mention.entityId === selectedEntityId) ?? null
+    : null;
+
+  const sourceTitle = useCallback(
+    (sourceId: string) =>
+      graph?.nodes.find((node) => node.sourceId === sourceId)?.title ??
+      library?.sources.find((source) => source.source_id === sourceId)?.metadata.title ??
+      sourceId,
+    [graph, library],
+  );
+
   const selectedRelations: { edge: KaleidoscopeEdge; other: KaleidoscopeNode | undefined }[] =
     selected && graph
       ? graph.edges
@@ -199,7 +276,35 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
             <div className="kaleidoscope-layout">
               <div className="kaleidoscope-canvas" ref={containerRef} aria-label="收藏知识图谱" />
               <aside className="kaleidoscope-panel">
-                {selected ? (
+                {selectedEntity ? (
+                  <>
+                    <button type="button" className="btn" onClick={() => setSelectedEntityId(null)}>
+                      ← 返回来源
+                    </button>
+                    <span className="kaleidoscope-panel-kind">{selectedEntity.entityType}</span>
+                    <h2 className="kaleidoscope-panel-title">{selectedEntity.entityName}</h2>
+                    <div className="kaleidoscope-mentions">
+                      {entityGroups.map((group) => (
+                        <div key={group.sourceId} className="kaleidoscope-mention-group">
+                          <span className="kaleidoscope-relations-head">{sourceTitle(group.sourceId)}</span>
+                          {group.cards.map((card) => {
+                            const url =
+                              card.source?.originalUrl ??
+                              graph?.nodes.find((node) => node.sourceId === group.sourceId)?.url;
+                            return (
+                              <KnowledgeCard
+                                key={card.cardId}
+                                density="inline"
+                                card={card}
+                                onOpen={url ? () => void openExternal(url) : undefined}
+                              />
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : selected ? (
                   <>
                     <span className="kaleidoscope-panel-kind">{selected.platform}</span>
                     <h2 className="kaleidoscope-panel-title">{selected.title}</h2>
@@ -210,6 +315,24 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
                         打开原文
                       </a>
                     </p>
+                    {sourceEntities.length > 0 && (
+                      <div className="kaleidoscope-entities">
+                        <span className="kaleidoscope-relations-head">实体（{sourceEntities.length}）</span>
+                        <div className="kaleidoscope-entity-chips">
+                          {sourceEntities.map(({ entity, count }) => (
+                            <button
+                              key={entity.entityId}
+                              type="button"
+                              className={`filter-chip ${entity.isHub ? "is-hub" : ""}`}
+                              title={entity.isHub ? "高频泛化实体（仅作标签）" : undefined}
+                              onClick={() => setSelectedEntityId(entity.entityId)}
+                            >
+                              {entity.entityName}（{count}）
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div className="kaleidoscope-relations">
                       <span className="kaleidoscope-relations-head">关联（{selectedRelations.length}）</span>
                       {selectedRelations.length === 0 ? (

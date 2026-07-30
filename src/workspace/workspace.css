@@ -1903,6 +1903,38 @@ body {
   margin-top: 14px;
 }
 
+/* 实体侧栏（计划 §Task5.3）：实体 chips + mention 分组列表 */
+
+.kaleidoscope-entities {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.kaleidoscope-entity-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-chip.is-hub {
+  opacity: 0.55;
+}
+
+.kaleidoscope-mentions {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.kaleidoscope-mention-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .kaleidoscope-relations-head {
   color: var(--muted);
   font-family: var(--mono);

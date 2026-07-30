@@ -372,6 +372,20 @@ export function createMockApi(): TuntaApi {
       return delay({ ...next });
     },
 
+    // mock 无策展流水线：从当前库内卡片合成一个跨来源实体，便于预览侧栏链路
+    listEntityMentions: () =>
+      delay(
+        library.cards.map((card) => ({
+          entityId: "entity:concept:注意力循环",
+          entityName: "注意力循环",
+          entityType: "concept",
+          isHub: false,
+          cardId: card.cardId,
+          sourceId: card.source?.source_id ?? "",
+          blockId: card.evidence[0]?.blockId ?? null,
+        })),
+      ),
+
     getKaleidoscope: () => delay(structuredClone(kaleidoscope)),
 
     rebuildKaleidoscope: () => {

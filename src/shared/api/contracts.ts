@@ -191,6 +191,21 @@ export interface UpdateCardStateRequest {
   userNote?: string | null;
 }
 
+/**
+ * 实体 mention 连接记录（计划 §Task5.3）：实体（索引）→ 卡片（内容）→ 来源（出处）。
+ * 软合并的实体已归到 canonical 名下；n 小，前端自行与 getLibrary 的卡片 join。
+ */
+export interface EntityMentionInfo {
+  entityId: string;
+  entityName: string;
+  entityType: string;
+  /** hub = 高频泛化实体（计划 §Task3.3）：侧栏展示时降权排序。 */
+  isHub: boolean;
+  cardId: string;
+  sourceId: string;
+  blockId: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Kaleidoscope 万花筒（App 级知识图谱：来源之间的实体共现关联）
 // ---------------------------------------------------------------------------
