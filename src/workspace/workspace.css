@@ -1825,7 +1825,6 @@ body {
   z-index: 8;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
   margin-bottom: 16px;
   padding: 10px 12px;
@@ -1835,9 +1834,19 @@ body {
   box-shadow: var(--shadow-floating-toolbar);
 }
 
+/*
+ * .mode-tabs 的 margin-top 是给 Library / Search 那种独立成行的场景准备的，
+ * 进到这个 align-items:center 的工具栏里会被计入盒模型：标签比统计和按钮
+ * 低 14.5px，工具栏也被从 58px 撑到 87px。
+ */
+.kaleidoscope-toolbar .mode-tabs {
+  margin-top: 0;
+}
+
+/* 统计紧跟标签（它描述的就是标签选中的那个视图），auto 把操作区顶到最右 */
 .kaleidoscope-stats {
+  margin-right: auto;
   color: var(--muted);
-  font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
