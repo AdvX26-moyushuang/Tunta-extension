@@ -13,8 +13,11 @@ export default defineManifest({
   name: "Tunta 屯獭",
   version: pkg.version,
   description: "让积灰的收藏重新可用：收藏、回看、调用，始终回到原始证据。",
-  permissions: ["activeTab", "tabs", "storage", "clipboardRead", "scripting", "alarms"],
+  permissions: ["activeTab", "tabs", "storage", "clipboardRead", "scripting", "alarms", "offscreen", "unlimitedStorage"],
   optional_host_permissions: ["https://*/*", "http://*/*"],
+  content_security_policy: {
+    extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+  },
   action: {
     default_title: "收藏到 Tunta",
     default_popup: "popup.html",

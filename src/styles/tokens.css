@@ -87,10 +87,24 @@
   --r-xl: 32px;
   --r-pill: 999px;
 
-  /* 交互抬升仍是轻量反馈，不进入 overlay 的高度。 */
-  --lift:
-    var(--shadow-contact),
-    0 5px 14px rgb(var(--shadow-rgb) / 0.1);
+  /*
+   * 控件填充（扁平解法）：浅色控件用色块承担身份，不靠描边。
+   *
+   * 原来 .btn 是 1.5px 近黑描边压在近白药丸上，一排按钮会把版面压黑
+   * （--ink-soft 那句注释就是在给这个打补丁）。改成水蓝淡底后，
+   * 冷色控件落在暖沙纸面上靠色相区分，不需要任何 stroke。
+   * 层级由填充深浅表达：rest → hover → active 逐级加深。
+   */
+  --fill-control: #e4eef5;
+  --fill-control-hover: var(--brand-water-soft);
+  --fill-control-active: #c3d9e8;
+  --fill-danger: #fbe4e0;
+
+  /*
+   * 已移除 --lift（hover 时 translateY(-2px) + 0 5px 14px 软投影）。
+   * 抬升是拟物反馈，与本系统「层级只由 outline / hairline shadow 表达」的前提冲突；
+   * 交互反馈统一改为填充加深。新组件不要重新引入抬升。
+   */
 
   --serif: "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, serif;
   --sans: "Avenir Next", "PingFang SC", "Hiragino Sans GB", sans-serif;

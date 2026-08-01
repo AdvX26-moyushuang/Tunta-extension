@@ -3,9 +3,13 @@ import type {
   BackendStatus,
   CaptureIntent,
   CaptureItem,
+  CardStateInfo,
   ChatHistoryEntry,
   ChatTurn,
   ConfirmProposalResponse,
+  EntityMentionInfo,
+  KaleidoscopeEdgeExplanation,
+  KaleidoscopeEntityGraph,
   KaleidoscopeGraph,
   KaleidoscopeRebuildResult,
   LibraryCard,
@@ -18,44 +22,37 @@ import type {
   ReviewQueueResponse,
   SubmitCaptureRequest,
   SubmitCaptureResult,
+  UpdateCardStateRequest,
 } from "@/shared/api/contracts";
 import { isExtensionContext } from "@/shared/browser";
 import { normalizeUrl } from "@/shared/format";
 import { sendMessage } from "@/shared/messages";
 import { runChatTurn, selectCardsForOpenQuery } from "./chat";
-import { rebuildAllGraphLinks } from "./kaleidoscope";
+import { chunkSourceId } from "./chunk";
+import { resetCaptureForRetry, resolveCaptureParseWarnings } from "./capture-state";
+import { explainEdgeRelation, rebuildKnowledgeGraph } from "./kaleidoscope";
 import {
-  clearAllLocalData,
-  getCapture,
-  getCaptureByUrl,
-  getChatTurnRecord,
-  getDocument,
-  listCaptures,
-  listCards,
-  listCardsBySource,
-  listChatTurns,
-  listDocuments,
-  listKaleidoscopeEdges,
-  pruneChatTurns,
-  putCapture,
-  putChatTurn,
-  putDocument,
+  getStore,
   type StoredCapture,
+  type StoredCardState,
+  type StoredChunk,
   type StoredDocument,
-} from "./db";
+} from "./store";
+import { annotatePageImages } from "./ocr";
 import {
   buildParserOutput,
   isBilibiliListUrl,
   isXiaohongshuUrl,
   LIST_CHILD_ORIGIN,
   parserOutputToSource,
+  toCaptureParseWarnings,
   type ParserBlockKind,
   type ParserContentType,
   type ParserLocator,
   type ParserProblem,
 } from "./parser";
 import { callEmbedding } from "./provider";
-import { retrieveCards } from "./retrieve";
+import { CHUNK_VECTOR_CANDIDATES, FTS_CANDIDATES, retrieveHits, type ChunkVectorHit } from "./retrieve";
 import { chooseReviewCandidate, createSingleFlight } from "./review";
 import { ensureOriginPermission, isChatConfigured, isEmbeddingConfigured, loadSettings } from "./settings";
 
@@ -64,6 +61,32 @@ function nowIso(): string {
 }
 
 const OPEN_QUERY_PATTERN = /有什么|有没有|推荐|新鲜|最近|随便|看点|啥|值得|interesting|recommend/i;
+
+/**
+ * 概念图节点上限（计划 §4「KaleidoscopePage 需要节点上限」）。
+ * cytoscape 渲染上千节点会糊成毛球且卡死；超出部分按跨来源数截断，
+ * UI 明示「显示 N / 共 M」，避免用户误以为看到的是全部。
+ */
+const ENTITY_GRAPH_NODE_LIMIT = 200;
+
+/** chunk 向量召回：查 embeddings 表拿 chunkId 排名，再回 chunks 表取正文。失败只降级不断检索。 */
+async function searchChunkHits(queryEmbedding: number[], model: string): Promise<ChunkVectorHit[]> {
+  try {
+    const hits = await getStore().searchEmbeddings(queryEmbedding, model, CHUNK_VECTOR_CANDIDATES, "chunk");
+    if (hits.length === 0) return [];
+    const chunkById = new Map<string, StoredChunk>();
+    for (const sourceId of new Set(hits.map((hit) => chunkSourceId(hit.ownerId)))) {
+      for (const chunk of await getStore().listChunksBySource(sourceId)) chunkById.set(chunk.chunkId, chunk);
+    }
+    return hits.flatMap((hit) => {
+      const chunk = chunkById.get(hit.ownerId);
+      return chunk ? [{ chunk, score: hit.score }] : []; // 防御：向量引用的 chunk 已被重新聚合淘汰
+    });
+  } catch (cause) {
+    console.warn("[tunta] chunk 向量召回失败，降级为卡片召回:", cause);
+    return [];
+  }
+}
 
 let captureCounter = 0;
 
@@ -78,6 +101,25 @@ function toPublicCapture(capture: StoredCapture): CaptureItem {
   void _expandLinks;
   void _attempts;
   return rest;
+}
+
+async function listPublicCaptures(): Promise<CaptureItem[]> {
+  const store = getStore();
+  const captures = await store.listCaptures();
+  if (!captures.some((capture) => capture.sourceId)) return captures.map(toPublicCapture);
+
+  // Parser Output 才是 warning 的 source of truth；capture 字段只是 Library 展示镜像。
+  const documents = new Map((await store.listDocuments()).map((document) => [document.sourceId, document]));
+  return captures.map((capture) => {
+    const warnings = resolveCaptureParseWarnings(
+      capture,
+      capture.sourceId ? documents.get(capture.sourceId) : undefined,
+    );
+    return toPublicCapture({
+      ...capture,
+      ...(warnings !== undefined ? { parseWarnings: warnings } : {}),
+    });
+  });
 }
 
 // 即时快照入库
@@ -154,7 +196,7 @@ function sourceWithCuration(doc: StoredDocument): LibrarySource {
 }
 
 async function buildLibrary(): Promise<LibraryResponse> {
-  const [documents, cards] = await Promise.all([listDocuments(), listCards()]);
+  const [documents, cards] = await Promise.all([getStore().listDocuments(), getStore().listCards()]);
   const sourceById = new Map(documents.map((doc) => [doc.sourceId, sourceWithCuration(doc)]));
   const libraryCards: LibraryCard[] = cards.map((card) => ({
     cardId: card.cardId,
@@ -164,6 +206,7 @@ async function buildLibrary(): Promise<LibraryResponse> {
     domainLabels: card.domainLabels,
     evidence: card.evidence,
     source: sourceById.get(card.sourceId),
+    createdAt: card.createdAt,
   }));
 
   const nodes: LibraryGraphNode[] = [];
@@ -244,7 +287,7 @@ function saveReviewSeen(seen: Set<string>): void {
 
 async function loadLocalReviewNext(): Promise<ReviewQueueResponse> {
   const seen = loadReviewSeen();
-  const captures = (await listCaptures()).filter(
+  const captures = (await getStore().listCaptures()).filter(
     (capture) =>
       capture.intent === "pending" &&
       !capture.archived &&
@@ -252,7 +295,7 @@ async function loadLocalReviewNext(): Promise<ReviewQueueResponse> {
       !seen.has(capture.captureId),
   );
   const cardsByCapture = await Promise.all(
-    captures.map((capture) => (capture.sourceId ? listCardsBySource(capture.sourceId) : Promise.resolve([]))),
+    captures.map((capture) => (capture.sourceId ? getStore().listCardsBySource(capture.sourceId) : Promise.resolve([]))),
   );
   const selection = chooseReviewCandidate(
     captures.map((capture, index) => ({
@@ -265,9 +308,11 @@ async function loadLocalReviewNext(): Promise<ReviewQueueResponse> {
     return { item: null, remaining: 0 };
   }
 
-  saveReviewSeen(selection.seen);
+  // 这里**不能**写 seen：取下一张是纯读取。
+  // 写在这里意味着打开回看页就把这条标记成已看过——用户什么都没点，
+  // 甚至刷新一次页面就会连续消耗队列。标记改由「下一条」显式触发。
   const { capture, cards } = selection.candidate;
-  const doc = capture.sourceId ? await getDocument(capture.sourceId) : undefined;
+  const doc = capture.sourceId ? await getStore().getDocument(capture.sourceId) : undefined;
   const first = cards[0];
   return {
     item: {
@@ -309,8 +354,45 @@ export function createLocalApi(): TuntaApi {
 
     getLibrary: () => buildLibrary(),
 
+    // StoredCardState 与 CardStateInfo 字段同构，直接透传
+    listCardStates: (): Promise<CardStateInfo[]> => getStore().listCardStates(),
+
+    updateCardState: async (cardId: string, patch: UpdateCardStateRequest): Promise<CardStateInfo> => {
+      const existing = await getStore().getCardState(cardId);
+      const next: StoredCardState = {
+        cardId,
+        starred: patch.starred ?? existing?.starred ?? false,
+        hidden: patch.hidden ?? existing?.hidden ?? false,
+        userNote: patch.userNote === undefined ? (existing?.userNote ?? null) : patch.userNote,
+        reviewCount: existing?.reviewCount ?? 0,
+        lastReviewedAt: existing?.lastReviewedAt ?? null,
+        updatedAt: nowIso(),
+      };
+      return getStore().putCardState(next);
+    },
+
+    listEntityMentions: async (): Promise<EntityMentionInfo[]> => {
+      const [entities, mentions] = await Promise.all([getStore().listEntities(), getStore().listMentions()]);
+      const byId = new Map(entities.map((entity) => [entity.entityId, entity]));
+      return mentions.flatMap((mention) => {
+        let entity = byId.get(mention.entityId);
+        // 软合并（canonicalId 非空）归到 canonical 名下；孤儿 mention 直接丢弃
+        if (entity?.canonicalId) entity = byId.get(entity.canonicalId) ?? entity;
+        if (!entity) return [];
+        return [{
+          entityId: entity.entityId,
+          entityName: entity.name,
+          entityType: entity.type,
+          isHub: entity.isHub,
+          cardId: mention.cardId,
+          sourceId: mention.sourceId,
+          blockId: mention.blockId,
+        }];
+      });
+    },
+
     getKaleidoscope: async (): Promise<KaleidoscopeGraph> => {
-      const [documents, cards, edges] = await Promise.all([listDocuments(), listCards(), listKaleidoscopeEdges()]);
+      const [documents, cards, edges] = await Promise.all([getStore().listDocuments(), getStore().listCards(), getStore().listKaleidoscopeEdges()]);
       const cardCountBySource = new Map<string, number>();
       for (const card of cards) {
         cardCountBySource.set(card.sourceId, (cardCountBySource.get(card.sourceId) ?? 0) + 1);
@@ -325,38 +407,132 @@ export function createLocalApi(): TuntaApi {
           url: doc.url,
           cardCount: cardCountBySource.get(doc.sourceId) ?? 0,
         })),
-        
-
-
         edges: edges.filter((edge) => known.has(edge.fromSourceId) && known.has(edge.toSourceId)),
       };
     },
 
+    getEntityGraph: async (): Promise<KaleidoscopeEntityGraph> => {
+      const [entities, edges, mentions] = await Promise.all([
+        getStore().listEntities(),
+        getStore().listEntityEdges(),
+        getStore().listMentions(),
+      ]);
+      const byId = new Map(entities.map((entity) => [entity.entityId, entity]));
+      // 软合并：canonicalId 非空的实体不单独成节点，统计归到 canonical 名下
+      const canonical = (entityId: string): string => byId.get(entityId)?.canonicalId ?? entityId;
+
+      const cards = new Map<string, Set<string>>();
+      const sources = new Map<string, Set<string>>();
+      for (const mention of mentions) {
+        const id = canonical(mention.entityId);
+        if (!byId.has(id)) continue;
+        (cards.get(id) ?? cards.set(id, new Set()).get(id)!).add(mention.cardId);
+        (sources.get(id) ?? sources.set(id, new Set()).get(id)!).add(mention.sourceId);
+      }
+
+      // hub（>30% 卡片的泛化实体）不进图：不剔除的话图会退化成星型
+      const candidates = entities
+        .filter((entity) => !entity.isHub && !entity.canonicalId && cards.has(entity.entityId))
+        .map((entity) => ({
+          entityId: entity.entityId,
+          name: entity.name,
+          type: entity.type as string,
+          mentionCount: cards.get(entity.entityId)?.size ?? 0,
+          sourceCount: sources.get(entity.entityId)?.size ?? 0,
+        }))
+        // 跨来源优先：一个概念被多条不同收藏提到，比在同一篇里反复出现更有信息量
+        .sort((a, b) => b.sourceCount - a.sourceCount || b.mentionCount - a.mentionCount);
+
+      const nodes = candidates.slice(0, ENTITY_GRAPH_NODE_LIMIT);
+      const kept = new Set(nodes.map((node) => node.entityId));
+      const visible = edges
+        .map((edge) => ({ ...edge, aId: canonical(edge.aId), bId: canonical(edge.bId) }))
+        .filter((edge) => edge.aId !== edge.bId && kept.has(edge.aId) && kept.has(edge.bId));
+      const maxCooccur = visible.reduce((max, edge) => Math.max(max, edge.cooccurCount), 0);
+
+      return {
+        nodes,
+        edges: visible.map((edge) => ({
+          edgeId: `eedge:${edge.aId}::${edge.bId}`,
+          aId: edge.aId,
+          bId: edge.bId,
+          cooccurCount: edge.cooccurCount,
+          pmi: edge.pmi,
+          strength: maxCooccur > 0 ? edge.cooccurCount / maxCooccur : 0,
+        })),
+        totalEntities: candidates.length,
+        nodeLimit: ENTITY_GRAPH_NODE_LIMIT,
+      };
+    },
+
     rebuildKaleidoscope: async (): Promise<KaleidoscopeRebuildResult> => {
+      // 纯计算重建（计划 §Task3.3）：零 LLM，不再要求 provider 配置
+      return rebuildKnowledgeGraph();
+    },
+
+    explainKaleidoscopeEdge: async (edgeId): Promise<KaleidoscopeEdgeExplanation> => {
+      // 懒加载（计划 §Task3.5）：命中缓存零 LLM，未命中才调 provider 并写回
+      const cached = await getStore().getEdgeExplanation(edgeId);
+      if (cached) {
+        return { edgeId, explanation: cached.explanation, cached: true, createdAt: cached.createdAt };
+      }
       const settings = await loadSettings();
       if (!isChatConfigured(settings)) {
-        throw new ApiError("尚未配置 provider：请在工作台「设置」页填写 API key 后再重建关系。", 400, "PROVIDER_NOT_CONFIGURED");
+        throw new ApiError("尚未配置 provider：请在工作台「设置」页填写 API key 后再生成解释。", 400, "PROVIDER_NOT_CONFIGURED");
       }
-      return rebuildAllGraphLinks(settings);
+      const [edges, documents] = await Promise.all([getStore().listKaleidoscopeEdges(), getStore().listDocuments()]);
+      const edge = edges.find((item) => item.edgeId === edgeId);
+      if (!edge) {
+        throw new ApiError("这条关联已不存在（可能刚重建过图谱），请刷新后重试。", 404, "EDGE_NOT_FOUND");
+      }
+      const docs = new Map(documents.map((doc) => [doc.sourceId, doc]));
+      const explanation = await explainEdgeRelation(settings, edge, docs.get(edge.fromSourceId), docs.get(edge.toSourceId));
+      const record = await getStore().putEdgeExplanation({ edgeId, explanation, createdAt: nowIso() });
+      return { edgeId, explanation: record.explanation, cached: false, createdAt: record.createdAt };
     },
 
     retrieve: async (query, topK = 8): Promise<RetrieveResponse> => {
       const started = Date.now();
-      const [cards, settings] = await Promise.all([listCards(), loadSettings()]);
+      const [cards, ftsHits, settings] = await Promise.all([
+        getStore().listCards(),
+        getStore().searchCardsFts(query, FTS_CANDIDATES),
+        loadSettings(),
+      ]);
       let queryEmbedding: number[] | null = null;
+      let chunkHits: ChunkVectorHit[] = [];
       if (isEmbeddingConfigured(settings)) {
         try {
           [queryEmbedding] = await callEmbedding(settings.embedding, [query]);
         } catch (cause) {
           console.warn("[tunta] 查询向量化失败，退化为纯 FTS:", cause);
         }
+        if (queryEmbedding) chunkHits = await searchChunkHits(queryEmbedding, settings.embedding.model);
       }
-      const hits = retrieveCards(cards, query, topK, queryEmbedding);
-      const documents = new Map((await listDocuments()).map((doc) => [doc.sourceId, doc]));
+      const hits = retrieveHits(cards, ftsHits, chunkHits, topK, queryEmbedding, settings.retrieval);
+      const documents = new Map((await getStore().listDocuments()).map((doc) => [doc.sourceId, doc]));
       return {
         hits: hits.map((hit) => {
+          if (hit.kind === "chunk") {
+            const doc = documents.get(hit.chunk.sourceId);
+            return {
+              kind: "chunk" as const,
+              chunk: {
+                chunkId: hit.chunk.chunkId,
+                sourceId: hit.chunk.sourceId,
+                text: hit.chunk.text,
+                blockIds: hit.chunk.blockIds,
+              },
+              score: hit.score,
+              matchedBy: hit.matchedBy,
+              evidence: {
+                sourceId: hit.chunk.sourceId,
+                blocks: doc ? parserOutputToSource(doc.parserOutput).blocks : [],
+              },
+            };
+          }
           const doc = documents.get(hit.card.sourceId);
           return {
+            kind: "card" as const,
             card: {
               cardId: hit.card.cardId,
               cardType: hit.card.cardType,
@@ -381,16 +557,18 @@ export function createLocalApi(): TuntaApi {
       if (!isChatConfigured(settings)) {
         throw new ApiError("尚未配置 provider：请在工作台「设置」页填写 API key 后再提问。", 400, "PROVIDER_NOT_CONFIGURED");
       }
-      const cards = await listCards();
+      const [cards, ftsHits] = await Promise.all([getStore().listCards(), getStore().searchCardsFts(query, FTS_CANDIDATES)]);
       let queryEmbedding: number[] | null = null;
+      let chunkHits: ChunkVectorHit[] = [];
       if (isEmbeddingConfigured(settings)) {
         try {
           [queryEmbedding] = await callEmbedding(settings.embedding, [query]);
         } catch (cause) {
           console.warn("[tunta] 查询向量化失败，退化为纯 FTS:", cause);
         }
+        if (queryEmbedding) chunkHits = await searchChunkHits(queryEmbedding, settings.embedding.model);
       }
-      let hits = retrieveCards(cards, query, 6, queryEmbedding);
+      let hits = retrieveHits(cards, ftsHits, chunkHits, 6, queryEmbedding, settings.retrieval);
       
       if (cards.length > 0 && (OPEN_QUERY_PATTERN.test(query) || hits.length < 2)) {
         const curated = await selectCardsForOpenQuery(settings, cards, query);
@@ -401,16 +579,16 @@ export function createLocalApi(): TuntaApi {
           hits = [];
         }
       }
-      const documents = new Map((await listDocuments()).map((doc) => [doc.sourceId, doc]));
+      const documents = new Map((await getStore().listDocuments()).map((doc) => [doc.sourceId, doc]));
       const turn = await runChatTurn({ query, hits, documents, settings });
       
-      await putChatTurn({ queryId: turn.query_id, query, createdAt: nowIso(), turn });
-      void pruneChatTurns().catch((cause) => console.warn("[tunta] 历史淘汰失败:", cause));
+      await getStore().putChatTurn({ queryId: turn.query_id, query, createdAt: nowIso(), turn });
+      void getStore().pruneChatTurns().catch((cause) => console.warn("[tunta] 历史淘汰失败:", cause));
       return turn;
     },
 
     listChatHistory: async (): Promise<ChatHistoryEntry[]> =>
-      (await listChatTurns()).map((record) => ({
+      (await getStore().listChatTurns()).map((record) => ({
         query_id: record.queryId,
         query: record.query,
         status: record.turn.status,
@@ -419,7 +597,7 @@ export function createLocalApi(): TuntaApi {
         citationCount: record.turn.citations.length,
       })),
 
-    getChatTurn: async (queryId): Promise<ChatTurn | null> => (await getChatTurnRecord(queryId))?.turn ?? null,
+    getChatTurn: async (queryId): Promise<ChatTurn | null> => (await getStore().getChatTurnRecord(queryId))?.turn ?? null,
 
     submitCapture: async (request: SubmitCaptureRequest, options?: SubmitCaptureOptions): Promise<SubmitCaptureResult> => {
       if (!isExtensionContext()) {
@@ -443,7 +621,7 @@ export function createLocalApi(): TuntaApi {
       if (isBilibiliListUrl(url)) {
         await ensureOriginPermission(LIST_CHILD_ORIGIN);
       }
-      const existing = await getCaptureByUrl(url);
+      const existing = await getStore().getCaptureByUrl(url);
       if (existing) {
         return { capture: toPublicCapture(existing), duplicate: true };
       }
@@ -456,17 +634,20 @@ export function createLocalApi(): TuntaApi {
         if (blocks.length === 0) {
           throw new ApiError("当前页快照为空：未能提取到正文内容。", 400, "SNAPSHOT_EMPTY");
         }
+        // 图片 OCR（opt-in）：失败只产生 warning，不阻断收藏
+        const ocr = await annotatePageImages(options.snapshot.images);
         const output = await buildParserOutput({
           originalUrl: url,
           finalUrl: options.snapshot.finalUrl || url,
           title: options.snapshot.title || url,
           platform: options.snapshot.platform || "web",
           contentType: toParserContentType(options.snapshot.contentType),
-          blocks,
+          blocks: [...blocks, ...ocr.blocks],
+          assets: ocr.assets,
           jobId: `job:${captureId}`,
           author: options.snapshot.author ?? null,
           publishedAt: options.snapshot.publishedAt ?? null,
-          warnings: toParserWarnings(options.snapshot),
+          warnings: [...toParserWarnings(options.snapshot), ...ocr.warnings],
         });
         const doc: StoredDocument = {
           sourceId: output.source.source_id,
@@ -477,7 +658,7 @@ export function createLocalApi(): TuntaApi {
           parserOutput: output,
           createdAt: nowIso(),
         };
-        await putDocument(doc);
+        await getStore().putDocument(doc);
         const capture: StoredCapture = {
           captureId,
           url,
@@ -490,11 +671,11 @@ export function createLocalApi(): TuntaApi {
           updatedAt: nowIso(),
           archived: false,
           failure: null,
+          parseWarnings: toCaptureParseWarnings(output.parse.warnings),
           ...(options.snapshot.listLinks?.length ? { expandLinks: options.snapshot.listLinks } : {}),
-          ...(options.snapshot.degradedNote ? { curationNote: options.snapshot.degradedNote } : {}),
         };
-        await putCapture(capture);
-        sendMessage({ type: "tunta:run-pipeline", captureId });
+        await getStore().putCapture(capture);
+        await sendMessage({ type: "tunta:run-pipeline", captureId });
         return { capture: toPublicCapture(capture), duplicate: false };
       }
 
@@ -510,39 +691,46 @@ export function createLocalApi(): TuntaApi {
         archived: false,
         failure: null,
       };
-      await putCapture(capture);
-      sendMessage({ type: "tunta:run-pipeline", captureId: capture.captureId, tabId: options?.tabId });
+      await getStore().putCapture(capture);
+      await sendMessage({ type: "tunta:run-pipeline", captureId: capture.captureId, tabId: options?.tabId });
       return { capture: toPublicCapture(capture), duplicate: false };
     },
 
-    listCaptures: async (): Promise<CaptureItem[]> => (await listCaptures()).map(toPublicCapture),
+    listCaptures: listPublicCaptures,
 
     updateCaptureIntent: async (captureId, intent: CaptureIntent): Promise<CaptureItem> => {
-      const capture = await getCapture(captureId);
+      const capture = await getStore().getCapture(captureId);
       if (!capture) throw new ApiError(`收藏不存在：${captureId}`, 404, "CAPTURE_NOT_FOUND");
       const next = { ...capture, intent, updatedAt: nowIso() };
-      await putCapture(next);
+      await getStore().putCapture(next);
       return toPublicCapture(next);
     },
 
     retryCapture: async (captureId): Promise<CaptureItem> => {
-      const capture = await getCapture(captureId);
+      const capture = await getStore().getCapture(captureId);
       if (!capture) throw new ApiError(`收藏不存在：${captureId}`, 404, "CAPTURE_NOT_FOUND");
       
 
-      const next = { ...capture, status: "idle" as const, failure: null, attempts: 0, updatedAt: nowIso() };
-      await putCapture(next);
-      sendMessage({ type: "tunta:run-pipeline", captureId });
+      const next = resetCaptureForRetry(capture, nowIso());
+      await getStore().putCapture(next);
+      await sendMessage({ type: "tunta:run-pipeline", captureId });
       return toPublicCapture(next);
     },
 
     archiveCapture: async (captureId): Promise<void> => {
-      const capture = await getCapture(captureId);
+      const capture = await getStore().getCapture(captureId);
       if (!capture) throw new ApiError(`收藏不存在：${captureId}`, 404, "CAPTURE_NOT_FOUND");
-      await putCapture({ ...capture, archived: true, updatedAt: nowIso() });
+      await getStore().putCapture({ ...capture, archived: true, updatedAt: nowIso() });
     },
 
     getReviewNext,
+
+    markReviewSeen: async (captureId: string): Promise<void> => {
+      const seen = loadReviewSeen();
+      if (seen.has(captureId)) return;
+      seen.add(captureId);
+      saveReviewSeen(seen);
+    },
 
     confirmProposal: async (): Promise<ConfirmProposalResponse> => {
       
@@ -552,7 +740,7 @@ export function createLocalApi(): TuntaApi {
 
     clearLibrary: async (): Promise<void> => {
       
-      await clearAllLocalData();
+      await getStore().clearAllLocalData();
       globalThis.localStorage?.removeItem(REVIEW_SEEN_KEY);
     },
   };

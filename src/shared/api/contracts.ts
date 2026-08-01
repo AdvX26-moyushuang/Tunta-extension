@@ -34,9 +34,15 @@ export interface ChatLocator {
   selector: string | null;
 }
 
+/** 引用证据的来源层级：card = 已提炼卡片；chunk = 原文片段（未经提炼）兜底。 */
+export type CitationSourceKind = "card" | "chunk";
+
 export interface ChatCitation {
   marker: number;
-  card_id: string;
+  /** 本地扩展字段（schema 0.3.0 尚未收录）；存量历史 turn 缺失时按 "card" 处理。 */
+  source_kind: CitationSourceKind;
+  /** source_kind 为 chunk 时为 null（命中的是原文片段，不对应任何卡片）。 */
+  card_id: string | null;
   source_id: string;
   block_id: string;
   quote: string | null;
@@ -137,6 +143,8 @@ export interface LibraryCard {
   domainLabels: string[];
   evidence: { blockId: string; quote?: string | null }[];
   source?: LibrarySource;
+  /** 卡片创建时间（ISO）；卡片流按此倒序。旧 mock 种子数据可能缺失。 */
+  createdAt?: string;
 }
 
 export interface LibraryGraphNode {
@@ -162,8 +170,44 @@ export interface LibraryResponse {
   edges: LibraryGraphEdge[];
 }
 
+/**
+ * 卡片上的用户状态（计划 §Task5.2）：star/隐藏/笔记。App 产品数据，
+ * 与卡片本体分离：策展重跑不丢状态（cardId 内容派生保证不错位）。
+ */
+export interface CardStateInfo {
+  cardId: string;
+  starred: boolean;
+  hidden: boolean;
+  userNote: string | null;
+  reviewCount: number;
+  lastReviewedAt: string | null;
+  updatedAt: string;
+}
+
+/** 部分更新：未传字段保持原值；userNote 传 null 表示清空笔记。 */
+export interface UpdateCardStateRequest {
+  starred?: boolean;
+  hidden?: boolean;
+  userNote?: string | null;
+}
+
+/**
+ * 实体 mention 连接记录（计划 §Task5.3）：实体（索引）→ 卡片（内容）→ 来源（出处）。
+ * 软合并的实体已归到 canonical 名下；n 小，前端自行与 getLibrary 的卡片 join。
+ */
+export interface EntityMentionInfo {
+  entityId: string;
+  entityName: string;
+  entityType: string;
+  /** hub = 高频泛化实体（计划 §Task3.3）：侧栏展示时降权排序。 */
+  isHub: boolean;
+  cardId: string;
+  sourceId: string;
+  blockId: string | null;
+}
+
 // ---------------------------------------------------------------------------
-// Kaleidoscope 万花筒（App 级知识图谱：来源之间的 LLM 关联）
+// Kaleidoscope 万花筒（App 级知识图谱：来源之间的实体共现关联）
 // ---------------------------------------------------------------------------
 
 /** 万花筒节点：一条收藏来源（文档粒度，卡片数作为节点权重）。 */
@@ -176,7 +220,7 @@ export interface KaleidoscopeNode {
   cardCount: number;
 }
 
-/** 万花筒边：LLM 在新收藏入库时计算出的来源间实质关联（App 产品数据）。 */
+/** 万花筒边：从实体共现派生的来源间关联（纯计算，App 产品数据）。 */
 export interface KaleidoscopeEdge {
   edgeId: string;
   fromSourceId: string;
@@ -193,27 +237,92 @@ export interface KaleidoscopeGraph {
   edges: KaleidoscopeEdge[];
 }
 
-/** 重建万花筒关系网络的结果统计（N 个来源产生 N-1 次 provider 调用）。 */
+/**
+ * 概念图节点：一个实体。这是万花筒的默认视图——实体是索引、卡片是内容、来源是出处。
+ * hub（出现在 >30% 卡片的泛化实体）不进图，只在侧栏保留为标签。
+ */
+export interface KaleidoscopeEntityNode {
+  entityId: string;
+  name: string;
+  type: string;
+  /** 覆盖卡片数（mentions 主键保证每实体每卡至多一条） */
+  mentionCount: number;
+  /** 跨来源数：一个概念被多少条不同收藏提到，跨源才是知识而不是相似度 */
+  sourceCount: number;
+}
+
+/** 概念图边：实体共现（纯计算，零 LLM）。strength 由 cooccurCount 归一化而来。 */
+export interface KaleidoscopeEntityEdge {
+  edgeId: string;
+  aId: string;
+  bId: string;
+  cooccurCount: number;
+  pmi: number | null;
+  strength: number;
+}
+
+/**
+ * 概念图。nodes 已按 mentionCount 截断到 nodeLimit——
+ * cytoscape 渲染上千节点会糊成毛球，截断是必须的（计划 §4「节点上限」）。
+ */
+export interface KaleidoscopeEntityGraph {
+  nodes: KaleidoscopeEntityNode[];
+  edges: KaleidoscopeEntityEdge[];
+  /** 截断前的非 hub 实体总数，用于告诉用户「这不是全部」 */
+  totalEntities: number;
+  nodeLimit: number;
+}
+
+/** 重建万花筒关系网络的结果统计（实体共现纯计算，零 provider 调用）。 */
 export interface KaleidoscopeRebuildResult {
   sources: number;
   edges: number;
 }
 
-export interface RetrieveHit {
-  card: {
-    cardId: string;
-    cardType: CardType;
-    title: string;
-    body: string;
-    domainLabels: string[];
-  };
-  score: number;
-  matchedBy: MatchedBy[];
-  evidence: {
-    sourceId: string;
-    blocks: SourceBlock[];
-  };
+/** 边解释（计划 §Task3.5）：点开边时才调 LLM 生成，cached 表示本次命中缓存。 */
+export interface KaleidoscopeEdgeExplanation {
+  edgeId: string;
+  explanation: string;
+  cached: boolean;
+  createdAt: string;
 }
+
+/**
+ * 检索命中的联合形态：card 是已过质量判断的提炼结果，chunk 是
+ * 「AI 没提炼但原文有」的兜底（同分时卡片排在 chunk 前）。
+ */
+export type RetrieveHit =
+  | {
+      kind: "card";
+      card: {
+        cardId: string;
+        cardType: CardType;
+        title: string;
+        body: string;
+        domainLabels: string[];
+      };
+      score: number;
+      matchedBy: MatchedBy[];
+      evidence: {
+        sourceId: string;
+        blocks: SourceBlock[];
+      };
+    }
+  | {
+      kind: "chunk";
+      chunk: {
+        chunkId: string;
+        sourceId: string;
+        text: string;
+        blockIds: string[];
+      };
+      score: number;
+      matchedBy: MatchedBy[];
+      evidence: {
+        sourceId: string;
+        blocks: SourceBlock[];
+      };
+    };
 
 export interface RetrieveResponse {
   hits: RetrieveHit[];
@@ -241,6 +350,14 @@ export interface CaptureFailure {
   recoverable: boolean;
 }
 
+/** Parser 的非致命问题；独立于 AI 策展结论，避免抓取诊断被 curationNote 覆盖。 */
+export interface CaptureParseWarning {
+  code: string;
+  message: string;
+  stage: "fetch" | "extract" | "transcribe" | "ocr" | "normalize" | "store" | "unknown";
+  recoverable: boolean;
+}
+
 export interface CaptureItem {
   captureId: string;
   url: string;
@@ -254,6 +371,8 @@ export interface CaptureItem {
   failure: CaptureFailure | null;
   /** AI 策展 / 列表展开结论（如「不产卡片的原因」「已展开为 N 个子收藏」）；有卡片时为空 */
   curationNote?: string;
+  /** 抓取 / 解析链路的结构化非致命告警；不能被后续 AI 策展覆盖。 */
+  parseWarnings?: CaptureParseWarning[];
 }
 
 export interface SubmitCaptureRequest {
@@ -281,12 +400,7 @@ export interface PageSnapshotBlock {
   };
 }
 
-export interface PageSnapshotWarning {
-  code: string;
-  message: string;
-  stage: "fetch" | "extract" | "transcribe" | "ocr" | "normalize" | "store" | "unknown";
-  recoverable: boolean;
-}
+export interface PageSnapshotWarning extends CaptureParseWarning {}
 
 export interface PageSnapshot {
   finalUrl: string;
@@ -301,6 +415,8 @@ export interface PageSnapshot {
   listLinks?: string[];
   /** 降级说明（如无字幕视频仅收录标题+简介）：标记需要 helper */
   degradedNote?: string;
+  /** OCR 待处理图片（已在页面上下文缩放转 base64）；仅图片 OCR 开启时携带。 */
+  images?: { url: string; dataUrl: string }[];
   /** Parser 可消费但不完整时的结构化 warning；入库后 parse.status 为 partial。 */
   warnings?: PageSnapshotWarning[];
 }

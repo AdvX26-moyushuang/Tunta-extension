@@ -1,22 +1,18 @@
 import type { CaptureFailure } from "@/shared/api/contracts";
 import { generateCardsForDocument } from "./cards";
-import { linkSourceIntoGraph } from "./kaleidoscope";
+import { chunkBlocks } from "./chunk";
+import { rebuildKnowledgeGraph } from "./kaleidoscope";
 import {
-  getCapture,
-  getDocument,
-  listCaptures,
-  listCardsBySource,
-  putCapture,
-  putCards,
-  putDocument,
-  replaceCardsForSource,
+  getStore,
   type StoredCapture,
   type StoredDocument,
-} from "./db";
-import { buildParserOutput, isXiaohongshuUrl } from "./parser";
+} from "./store";
+import { buildParserOutput, isXiaohongshuUrl, toCaptureParseWarnings } from "./parser";
+import { annotatePageImages } from "./ocr";
 import { callEmbedding, ProviderError } from "./provider";
-import { isChatConfigured, isEmbeddingConfigured, loadSettings } from "./settings";
+import { isEmbeddingConfigured, loadSettings, type LocalSettings } from "./settings";
 import { expandListCaptures } from "./expand";
+import { isPdfUrl } from "./adapters/pdf";
 import { executeSnapshotOnTab, SnapshotError, type SnapshotData } from "./snapshot";
 
 const TAB_LOAD_TIMEOUT_MS = 45_000;
@@ -69,6 +65,10 @@ async function snapshotForUrl(url: string, tabId?: number): Promise<SnapshotData
       "小红书 local 抓取不打开隐藏后台页：请在目标笔记页点击插件主动收藏。",
       true,
     );
+  }
+  // PDF 由扩展直接 fetch 字节（pdfAdapter 不依赖 tabId），不用白开一个后台 tab
+  if (tabId == null && isPdfUrl(url)) {
+    return executeSnapshotOnTab(-1, url);
   }
   let targetTabId = tabId ?? null;
   let created = false;
@@ -142,12 +142,59 @@ const queued = new Set<string>();
 
 async function save(capture: StoredCapture): Promise<StoredCapture> {
   const next = { ...capture, updatedAt: nowIso() };
-  await putCapture(next);
+  await getStore().putCapture(next);
   return next;
 }
 
+/** chunk 批量 embed 的单次输入上限：长视频 30~80 个 chunk 分 2~3 次请求，不撞 provider 限制。 */
+const CHUNK_EMBED_BATCH = 32;
+
+/**
+ * embed 阶段主体（计划 §Task2.3）：cards 与原文 chunks 都写 embeddings 表。
+ * 写入前查表去重：同一 source 重跑流水线不会重复烧 embedding 配额。
+ */
+async function embedSourceContent(settings: LocalSettings, sourceId: string): Promise<void> {
+  const model = settings.embedding.model;
+  const createdAt = nowIso();
+
+  // cards：缺向量的补 embed；已有 card.embedding 的只回填 embeddings 表（视为当前模型，换模型盘点走 listEmbeddingModels）
+  const embeddedCards = new Set(await getStore().listEmbeddedOwnerIds("card", model));
+  const cards = (await getStore().listCardsBySource(sourceId)).filter((card) => !embeddedCards.has(card.cardId));
+  const pending = cards.filter((card) => !card.embedding?.length);
+  if (pending.length > 0) {
+    const vectors = await callEmbedding(settings.embedding, pending.map((card) => `${card.title}\n${card.body}`));
+    // retrieve 的向量路径暂仍读 card.embedding，双写到 Task2.3b 切换后移除
+    await getStore().putCards(pending.map((card, index) => ({ ...card, embedding: vectors[index] })));
+    pending.forEach((card, index) => { card.embedding = vectors[index]; });
+  }
+  await getStore().putEmbeddings(
+    cards
+      .filter((card) => card.embedding?.length)
+      .map((card) => ({ ownerKind: "card" as const, ownerId: card.cardId, model, vector: card.embedding as number[], createdAt })),
+  );
+
+  // chunks：先持久化 chunk 本体再分批 embed；重新聚合后消失的旧 chunk 向量一并清掉
+  const doc = await getStore().getDocument(sourceId);
+  if (!doc) return;
+  const chunks = chunkBlocks(sourceId, doc.parserOutput.blocks);
+  const currentIds = new Set(chunks.map((chunk) => chunk.chunkId));
+  const stale = (await getStore().listChunksBySource(sourceId)).filter((chunk) => !currentIds.has(chunk.chunkId));
+  if (stale.length > 0) await getStore().deleteEmbeddings("chunk", stale.map((chunk) => chunk.chunkId));
+  await getStore().replaceChunksForSource(sourceId, chunks.map((chunk) => ({ ...chunk, createdAt })));
+
+  const embeddedChunks = new Set(await getStore().listEmbeddedOwnerIds("chunk", model));
+  const pendingChunks = chunks.filter((chunk) => !embeddedChunks.has(chunk.chunkId));
+  for (let start = 0; start < pendingChunks.length; start += CHUNK_EMBED_BATCH) {
+    const batch = pendingChunks.slice(start, start + CHUNK_EMBED_BATCH);
+    const vectors = await callEmbedding(settings.embedding, batch.map((chunk) => chunk.text));
+    await getStore().putEmbeddings(
+      batch.map((chunk, index) => ({ ownerKind: "chunk" as const, ownerId: chunk.chunkId, model, vector: vectors[index], createdAt })),
+    );
+  }
+}
+
 async function execute(captureId: string, tabId?: number): Promise<void> {
-  let capture = await getCapture(captureId);
+  let capture = await getStore().getCapture(captureId);
   if (!capture || capture.status === "done" || capture.archived) return;
   const settings = await loadSettings();
 
@@ -156,18 +203,21 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
     if (!capture.stage) {
       capture = await save({ ...capture, status: "fetching", failure: null });
       const snapshot = await snapshotForUrl(capture.url, tabId);
+      // 图片 OCR（opt-in）：失败只产生 warning，不阻断收藏
+      const ocr = await annotatePageImages(snapshot.images);
       const output = await buildParserOutput({
         originalUrl: capture.url,
         finalUrl: snapshot.finalUrl,
         title: snapshot.title,
         platform: snapshot.platform,
         contentType: snapshot.contentType,
-        blocks: snapshot.blocks,
+        blocks: [...snapshot.blocks, ...ocr.blocks],
+        assets: ocr.assets,
         jobId: `job:${capture.captureId}`,
         author: snapshot.author ?? null,
         publishedAt: snapshot.publishedAt ?? null,
-        
-        warnings: snapshot.warnings,
+
+        warnings: [...snapshot.warnings, ...ocr.warnings],
       });
       const doc: StoredDocument = {
         sourceId: output.source.source_id,
@@ -178,15 +228,15 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
         parserOutput: output,
         createdAt: nowIso(),
       };
-      await putDocument(doc);
+      await getStore().putDocument(doc);
       capture = await save({
         ...capture,
         status: "parsing",
         stage: "snapshot",
         sourceId: doc.sourceId,
         title: doc.title,
+        parseWarnings: toCaptureParseWarnings(output.parse.warnings),
         ...(snapshot.listLinks?.length ? { expandLinks: snapshot.listLinks } : {}),
-        ...(snapshot.degradedNote ? { curationNote: snapshot.degradedNote } : {}),
       });
     }
 
@@ -216,16 +266,18 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
 
     
     if (capture.stage === "snapshot") {
-      const doc = capture.sourceId ? await getDocument(capture.sourceId) : undefined;
+      const doc = capture.sourceId ? await getStore().getDocument(capture.sourceId) : undefined;
       if (!doc) {
         throw new ProviderError("本地文档缺失，无法生成卡片。", "STORE_DOCUMENT_MISSING");
       }
       capture = await save({ ...capture, status: "parsing" });
       const curation = await generateCardsForDocument(settings, doc);
-      await replaceCardsForSource(doc.sourceId, curation.cards);
+      await getStore().replaceCardsForSource(doc.sourceId, curation.cards);
+      // 实体与提及随卡同步（计划 §Task3.2）：策展重跑后 mentions 与新卡对齐
+      await getStore().syncEntityMentionsForSource(doc.sourceId, curation.cards);
       
       if (curation.source.title || curation.source.summary) {
-        await putDocument({
+        await getStore().putDocument({
           ...doc,
           curatedTitle: curation.source.title ?? doc.curatedTitle,
           summary: curation.source.summary ?? doc.summary,
@@ -248,12 +300,7 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
     if (capture.stage === "cards") {
       if (isEmbeddingConfigured(settings) && capture.sourceId) {
         try {
-          const cards = await listCardsBySource(capture.sourceId);
-          const pending = cards.filter((card) => !card.embedding);
-          if (pending.length > 0) {
-            const vectors = await callEmbedding(settings.embedding, pending.map((card) => `${card.title}\n${card.body}`));
-            await putCards(pending.map((card, index) => ({ ...card, embedding: vectors[index] })));
-          }
+          await embedSourceContent(settings, capture.sourceId);
         } catch (cause) {
           console.warn("[tunta] embedding 阶段失败（卡片保留 FTS 检索能力）:", cause);
         }
@@ -263,13 +310,12 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
 
     
     if (capture.stage === "embed") {
-      if (isChatConfigured(settings) && capture.sourceId) {
-        try {
-          const linked = await linkSourceIntoGraph(settings, capture.sourceId);
-          console.info(`[tunta] 万花筒关联完成（${capture.captureId}）：${linked} 条关系边`);
-        } catch (cause) {
-          console.warn("[tunta] 万花筒关联失败（收藏不受影响）:", cause);
-        }
+      // 图谱重建是纯计算（计划 §Task3.3）：零 LLM，不依赖 provider 配置
+      try {
+        const result = await rebuildKnowledgeGraph();
+        console.info(`[tunta] 万花筒重建完成（${capture.captureId}）：${result.edges} 条关系边`);
+      } catch (cause) {
+        console.warn("[tunta] 万花筒重建失败（收藏不受影响）:", cause);
       }
       capture = await save({ ...capture, stage: "graph" });
     }
@@ -277,7 +323,7 @@ async function execute(captureId: string, tabId?: number): Promise<void> {
     await save({ ...capture, status: "done", failure: null, attempts: 0 });
   } catch (cause) {
     const failure = toFailure(cause);
-    const current = await getCapture(captureId);
+    const current = await getStore().getCapture(captureId);
     if (current) await save({ ...current, status: "failed", failure });
     console.warn(`[tunta] pipeline 失败（${captureId}）:`, failure);
   }
@@ -296,7 +342,7 @@ export async function runPipeline(captureId: string, options?: { tabId?: number 
 
 
 export async function resumeStuckPipelines(): Promise<void> {
-  const captures = await listCaptures();
+  const captures = await getStore().listCaptures();
   const cutoff = Date.now() - STUCK_THRESHOLD_MS;
   const stuck = captures.filter(
     (capture) =>

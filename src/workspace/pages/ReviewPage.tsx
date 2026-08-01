@@ -3,6 +3,7 @@ import { getApi } from "@/shared/api";
 import type { ReviewItem } from "@/shared/api/contracts";
 import { formatTime, hostOf } from "@/shared/format";
 import { openExternal } from "@/shared/browser";
+import { KnowledgeCard } from "@/shared/components/KnowledgeCard";
 
 interface ReviewPageProps {
   onToast: (message: string) => void;
@@ -47,14 +48,26 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
     };
   }, [loadNext]);
 
+  /**
+   * 「已看过」只在用户主动跳过时写入。取下一张本身是纯读取——
+   * 否则光是打开这一页（或刷新）就会静默消耗回看队列。
+   */
   const skip = useCallback(() => {
     if (state !== "ready" || !item || leaving) return;
+    const captureId = item.capture.captureId;
     setLeaving("left");
     transitionTimer.current = window.setTimeout(() => {
       transitionTimer.current = null;
-      void loadNext();
+      void (async () => {
+        try {
+          await getApi().markReviewSeen(captureId);
+        } catch (error) {
+          onToast(`标记已看过失败：${error instanceof Error ? error.message : String(error)}`);
+        }
+        await loadNext();
+      })();
     }, 210);
-  }, [item, leaving, loadNext, state]);
+  }, [item, leaving, loadNext, onToast, state]);
 
   const archive = useCallback(async () => {
     if (state !== "ready" || !item || leaving) return;
@@ -103,22 +116,12 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
               <div className="review-meta">待消化剩余 {remaining} 条 · ← 下一条 · → 归档</div>
             </div>
             <div className="card-stack">
-              <article className={`knowledge-card ${leaving ? `leave-${leaving}` : ""}`}>
-                <div className="card-topline">
-                  <span className="card-type">{item.card.cardType}</span>
-                  <span>
-                    {hostOf(item.originalUrl)} · 收藏于 {formatTime(item.capture.createdAt)}
-                  </span>
-                </div>
-                <h1 className="card-title">{item.card.title}</h1>
-                <p className="card-body">{item.card.body}</p>
-                <div className="card-domain-list">
-                  {item.card.domainLabels.map((label) => (
-                    <span key={label} className="domain-pill">
-                      {label}
-                    </span>
-                  ))}
-                </div>
+              <KnowledgeCard
+                density="full"
+                card={item.card}
+                meta={`${hostOf(item.originalUrl)} · 收藏于 ${formatTime(item.capture.createdAt)}`}
+                className={leaving ? `leave-${leaving}` : ""}
+              >
                 <button
                   type="button"
                   className="evidence-strip"
@@ -134,7 +137,7 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
                     <span className="evidence-host">{hostOf(item.originalUrl)} · 打开原文</span>
                   </span>
                 </button>
-              </article>
+              </KnowledgeCard>
             </div>
             {/* actions 留在 card-stack 之外：card-shadow 锚在 stack 底部，
                 包进来会让那两道蓝色衬条压到按钮上 */}

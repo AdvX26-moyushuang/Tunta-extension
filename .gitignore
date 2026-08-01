@@ -39,6 +39,7 @@ pnpm-debug.log*
 .vscode/
 !.vscode/extensions.json
 .idea/
+.claude/launch.json
 *.swp
 *.swo
 
@@ -48,3 +49,5 @@ pnpm-debug.log*
 ._*
 Thumbs.db
 desktop.ini
+
+/local/

@@ -70,6 +70,7 @@ export function App() {
             ...(data.author ? { author: data.author } : {}),
             ...(data.publishedAt ? { publishedAt: data.publishedAt } : {}),
             ...(data.listLinks?.length ? { listLinks: data.listLinks } : {}),
+            ...(data.images?.length ? { images: data.images } : {}),
             ...(data.degradedNote ? { degradedNote: data.degradedNote } : {}),
             ...(data.warnings.length ? { warnings: data.warnings } : {}),
           };
@@ -77,7 +78,9 @@ export function App() {
 
         const result = await getApi().submitCapture({ url: value, intent }, { tabId: isCurrentTab, snapshot });
         track(result.capture);
-        sendMessage({ type: "tunta:capture-submitted", captureId: result.capture.captureId });
+        void sendMessage({ type: "tunta:capture-submitted", captureId: result.capture.captureId }).catch((cause) => {
+          console.warn("[tunta] badge 状态消息发送失败:", cause);
+        });
         setNotice(
           result.duplicate
             ? "URL 已在收藏库中，以下是现有记录。"
@@ -180,7 +183,10 @@ export function App() {
                 onClick={() => {
                   void getApi()
                     .retryCapture(tracked.captureId)
-                    .then(track);
+                    .then(track)
+                    .catch((cause) => {
+                      setError(`重试失败：${cause instanceof Error ? cause.message : String(cause)}`);
+                    });
                 }}
               >
                 重试

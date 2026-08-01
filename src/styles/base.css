@@ -152,17 +152,21 @@ p {
   gap: 8px;
   padding: 11px 16px;
   cursor: pointer;
-  border: 1px solid var(--ink-soft);
+  border: 0;
   border-radius: var(--r-pill);
-  background: var(--paper-bright);
+  background: var(--fill-control);
+  color: var(--brand-water-deep);
   font-size: var(--text-xs);
   font-weight: 650;
-  transition: transform 130ms ease, box-shadow 130ms ease;
+  transition: background 130ms ease;
 }
 
 .btn:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: var(--lift);
+  background: var(--fill-control-hover);
+}
+
+.btn:active:not(:disabled) {
+  background: var(--fill-control-active);
 }
 
 .btn:disabled {

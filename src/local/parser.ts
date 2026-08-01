@@ -1,4 +1,4 @@
-import type { LibrarySource, SourceBlock } from "@/shared/api/contracts";
+import type { CaptureParseWarning, LibrarySource, SourceBlock } from "@/shared/api/contracts";
 
 export interface ParserLocator {
   kind: "timestamp" | "page" | "paragraph" | "dom" | "unknown";
@@ -42,6 +42,25 @@ export interface ParserProblem {
   details?: Record<string, unknown>;
 }
 
+export function toCaptureParseWarnings(warnings: ParserProblem[]): CaptureParseWarning[] {
+  return warnings.map(({ code, message, stage, recoverable }) => ({
+    code,
+    message,
+    stage,
+    recoverable,
+  }));
+}
+
+export interface ParserAsset {
+  asset_id: string;
+  kind: "image" | "video" | "audio";
+  url: string | null;
+  blob_ref: string | null;   // Phase 4 用
+  ocr_text: string | null;
+  caption: string | null;
+  metadata: Record<string, unknown>;
+}
+
 export interface ParserOutput {
   schema_version: "0.1.0";
   source: {
@@ -58,7 +77,7 @@ export interface ParserOutput {
     raw_content_ref: string | null;
   };
   blocks: ParserBlock[];
-  assets: [];
+  assets: ParserAsset[];
   parse: {
     job_id: string;
     parser_name: string;
@@ -72,51 +91,47 @@ export interface ParserOutput {
 }
 
 
-export interface ArticleSnapshotBlock {
-  kind: "heading" | "paragraph" | "list_item" | "quote" | "code";
-  text: string;
+// 通用正文提取已换成 Readability（计划 §Task4.1）：页面只抓 outerHTML，
+// 解析在 offscreen 跑，见 src/offscreen/readability.ts。
+
+export interface PageImageCapture {
+  url: string;
+  /** data:image/jpeg;base64,… 形式，最长边已在页面上下文缩到 1024px。 */
+  dataUrl: string;
 }
 
-export type ArticleSnapshotResult =
-  | { ok: true; url: string; title: string; blocks: ArticleSnapshotBlock[] }
-  | { ok: false; code: string; message: string };
-
-export function extractArticleSnapshot(): ArticleSnapshotResult {
-  const url = location.href;
-  const title = (document.title || "").trim() || url;
-  const root =
-    document.querySelector("article") ??
-    document.querySelector("main") ??
-    document.querySelector("[role=main]") ??
-    document.body;
-  const blocks: { kind: "heading" | "paragraph" | "list_item" | "quote" | "code"; text: string }[] = [];
+/**
+ * 页面图片收集（计划 §Task4.3）：必须在页面上下文缩放后转 base64——
+ * 不缩放会撑爆 executeScript 的消息大小限制，且平台图片常需要页面的
+ * cookie/referer 才能取到。注入函数，闭包会丢失：不得引用外部变量。
+ */
+export function collectPageImages(): PageImageCapture[] {
+  const MAX_IMAGES = 4;
+  const MAX_SIDE = 1024;
+  const MIN_SIDE = 200;
+  const results: PageImageCapture[] = [];
   const seen = new Set<string>();
-  const push = (kind: (typeof blocks)[number]["kind"], raw: string) => {
-    const text = raw.replace(/\s+/g, " ").trim();
-    if (!text || seen.has(text)) return;
-    seen.add(text);
-    blocks.push({ kind, text: text.slice(0, 2000) });
-  };
-  const nodes = root.querySelectorAll("h1,h2,h3,p,li,blockquote,pre");
-  for (const node of Array.from(nodes)) {
-    const tag = node.tagName.toLowerCase();
-    const text = (node as HTMLElement).innerText ?? "";
-    const isHeading = /^h[123]$/.test(tag);
-    if (!isHeading && text.replace(/\s+/g, " ").trim().length < 30) continue;
-    push(isHeading ? "heading" : tag === "li" ? "list_item" : tag === "blockquote" ? "quote" : tag === "pre" ? "code" : "paragraph", text);
-    if (blocks.length >= 160) break;
-  }
-  if (blocks.length < 3 && document.body) {
-    for (const line of (document.body.innerText ?? "").split(/\n+/)) {
-      const text = line.trim();
-      if (text.length >= 30) push("paragraph", text);
-      if (blocks.length >= 80) break;
+  for (const img of Array.from(document.querySelectorAll("img"))) {
+    if (results.length >= MAX_IMAGES) break;
+    const src = img.currentSrc || img.src;
+    // 小图多为头像/图标，不值得花 OCR 预算
+    if (!src || seen.has(src) || img.naturalWidth < MIN_SIDE || img.naturalHeight < MIN_SIDE) continue;
+    seen.add(src);
+    const scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) continue;
+    try {
+      context.drawImage(img, 0, 0, canvas.width, canvas.height);
+      // 无 CORS 头的跨域图片会污染 canvas，toDataURL 抛 SecurityError：跳过该图
+      results.push({ url: src, dataUrl: canvas.toDataURL("image/jpeg", 0.8) });
+    } catch {
+      continue;
     }
   }
-  if (blocks.length === 0) {
-    return { ok: false, code: "EXTRACT_EMPTY", message: "未能从页面提取到正文内容。" };
-  }
-  return { ok: true, url, title, blocks };
+  return results;
 }
 
 export interface XiaohongshuSnapshotBlock {
@@ -336,15 +351,16 @@ export type BilibiliSnapshotResult =
       title: string;
       author: string | null;
       cues: SubtitleCue[];
-      degraded?: "no-subtitle" | "subtitle-fetch-failed";
+      degraded?: "no-subtitle" | "subtitle-login-required" | "subtitle-fetch-failed";
+      degradedDetail?: string;
       description?: string;
     }
   | { ok: false; code: string; message: string };
 
-
 export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult> {
   const url = location.href;
   type BilibiliVideoData = {
+    aid?: number;
     title?: string;
     desc?: string;
     cid?: number;
@@ -362,8 +378,6 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
   const playinfo = (window as unknown as { __playinfo__?: { data?: { subtitle?: { subtitles?: unknown } } } }).__playinfo__;
   const bvid = /\/video\/(BV[0-9A-Za-z]+)/.exec(url)?.[1] ?? null;
   let metadataApiError: string | null = null;
-
-  
 
   if (!video && bvid) {
     try {
@@ -391,13 +405,17 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
   const title = (video?.title ?? (document.title || "").replace(/_哔哩哔哩_bilibili\s*$/, "").trim()) || url;
   const author = video?.owner?.name?.trim() || null;
   const description = (video?.desc ?? "").trim();
-  const makeDegraded = (kind: "no-subtitle" | "subtitle-fetch-failed"): BilibiliSnapshotResult => ({
+  const makeDegraded = (
+    kind: "no-subtitle" | "subtitle-login-required" | "subtitle-fetch-failed",
+    degradedDetail?: string,
+  ): BilibiliSnapshotResult => ({
     ok: true,
     url,
     title,
     author,
     cues: [],
     degraded: kind,
+    ...(degradedDetail ? { degradedDetail } : {}),
     description,
   });
 
@@ -411,58 +429,242 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
     };
   }
 
-  
-  type SubtitleEntry = { lan?: string; subtitle_url?: string };
+  type SubtitleEntry = { lan?: string; lan_doc?: string; subtitle_url?: string };
+  // 当前 B 站播放器从 x/v2/subtitle/web/view 读取 protobuf。这里只解码
+  // SubtitleViewReply.subtitle.subtitles 中实际需要的三个 string 字段，未知字段按 wire type 跳过。
+  // 本函数会被 executeScript 序列化注入 MAIN world，decoder 必须留在函数体内，不能依赖外部闭包。
+  const decodeSubtitleView = (bytes: Uint8Array): SubtitleEntry[] => {
+    type ProtobufField = { fieldNumber: number; wireType: number; payload?: Uint8Array };
+    const parseFields = (input: Uint8Array): ProtobufField[] => {
+      const fields: ProtobufField[] = [];
+      let offset = 0;
+      const readVarint = (): number => {
+        let result = 0;
+        let multiplier = 1;
+        for (let count = 0; count < 10; count += 1) {
+          if (offset >= input.length) throw new Error("truncated varint");
+          const byte = input[offset];
+          offset += 1;
+          result += (byte & 0x7f) * multiplier;
+          if ((byte & 0x80) === 0) return result;
+          multiplier *= 128;
+        }
+        throw new Error("varint exceeds 10 bytes");
+      };
+      const skipVarint = (): void => {
+        for (let count = 0; count < 10; count += 1) {
+          if (offset >= input.length) throw new Error("truncated varint field");
+          const byte = input[offset];
+          offset += 1;
+          if ((byte & 0x80) === 0) return;
+        }
+        throw new Error("varint field exceeds 10 bytes");
+      };
+      const requireBytes = (length: number): void => {
+        if (length < 0 || offset + length > input.length) throw new Error("truncated field payload");
+      };
+
+      while (offset < input.length) {
+        const tag = readVarint();
+        const fieldNumber = Math.floor(tag / 8);
+        const wireType = tag & 7;
+        if (fieldNumber <= 0) throw new Error(`invalid field number ${fieldNumber}`);
+        if (wireType === 0) {
+          skipVarint();
+          fields.push({ fieldNumber, wireType });
+        } else if (wireType === 1) {
+          requireBytes(8);
+          offset += 8;
+          fields.push({ fieldNumber, wireType });
+        } else if (wireType === 2) {
+          const length = readVarint();
+          requireBytes(length);
+          const payload = input.slice(offset, offset + length);
+          offset += length;
+          fields.push({ fieldNumber, wireType, payload });
+        } else if (wireType === 5) {
+          requireBytes(4);
+          offset += 4;
+          fields.push({ fieldNumber, wireType });
+        } else {
+          throw new Error(`unsupported wire type ${wireType}`);
+        }
+      }
+      return fields;
+    };
+
+    const textDecoder = new TextDecoder();
+    const rootSubtitle = parseFields(bytes).find((field) => field.fieldNumber === 1 && field.wireType === 2)?.payload;
+    if (!rootSubtitle) return [];
+    const entries: SubtitleEntry[] = [];
+    for (const itemField of parseFields(rootSubtitle)) {
+      if (itemField.fieldNumber !== 3 || itemField.wireType !== 2 || !itemField.payload) continue;
+      const itemFields = parseFields(itemField.payload);
+      const stringValue = (fieldNumber: number): string | undefined => {
+        const payload = itemFields.find((field) => field.fieldNumber === fieldNumber && field.wireType === 2)?.payload;
+        return payload ? textDecoder.decode(payload) : undefined;
+      };
+      entries.push({
+        lan: stringValue(3),
+        lan_doc: stringValue(4),
+        subtitle_url: stringValue(5),
+      });
+    }
+    return entries;
+  };
+  const decodeSubtitleUrl = (rawUrl: string): string => {
+    const match = /^\/\/subtitle\.bilibili\.com\/([^?]+)(?:\?(.*))?$/.exec(rawUrl);
+    if (!match) return rawUrl;
+    const decoders: [prefix: string, key: string][] = [
+      ['nP](wOFRvU.+<fjS{jn-!$D|Dz&",zT`', "=CFxYRn{.y|uVyO$uh&sikph?N.ilF/`"],
+      ['Bn"q~|albg@]Go~ACgyDvKnd+)_D}^&J?', "Cu~L!xs~f^&r@'vh=q]q{eeng*sEg^kp#J"],
+    ];
+    let encodedPath: string;
+    try {
+      encodedPath = decodeURIComponent(match[1]);
+    } catch (cause) {
+      throw new Error(`invalid obfuscated subtitle URL: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    for (const [prefix, key] of decoders) {
+      const xorKey = `${key}bilibili`;
+      let decoded = "";
+      for (let index = 0; index < encodedPath.length; index += 1) {
+        decoded += String.fromCharCode(
+          encodedPath.charCodeAt(index) ^ xorKey.charCodeAt(index % xorKey.length),
+        );
+      }
+      if (decoded.startsWith(prefix)) {
+        const path = decoded.slice(prefix.length);
+        if (!path) break;
+        return `//aisubtitle.hdslb.com${path}${match[2] ? `?${match[2]}` : ""}`;
+      }
+    }
+    throw new Error("unknown Bilibili subtitle URL obfuscation key");
+  };
   let entries = Array.isArray(playinfo?.data?.subtitle?.subtitles)
     ? (playinfo.data!.subtitle!.subtitles as SubtitleEntry[])
     : [];
+  const subtitleDiscoveryErrors: string[] = [];
+  let subtitleLoginRequired = false;
 
-    
   if (entries.length === 0) {
     const pageNo = Math.max(1, Number(new URLSearchParams(location.search).get("p") ?? "1") || 1);
     const cid = video?.pages?.[pageNo - 1]?.cid ?? video?.cid ?? null;
-    if (bvid && cid) {
+    const aid = video?.aid ?? null;
+    if (aid && cid) {
+      const params = new URLSearchParams({
+        oid: String(cid),
+        pid: String(aid),
+        context_ext: JSON.stringify({ video_type: 1 }),
+        type: "1",
+        cur_production_type: "0",
+        preferred_language: "ai-zh",
+        playlist_switch: "0",
+      });
       try {
-        const response = await fetch(`https://api.bilibili.com/x/player/v2?bvid=${bvid}&cid=${cid}`, {
+        const response = await fetch(`https://api.bilibili.com/x/v2/subtitle/web/view?${params.toString()}`, {
           credentials: "include",
           signal: AbortSignal.timeout(10_000),
         });
-        if (response.ok) {
-          const json = (await response.json()) as { data?: { subtitle?: { subtitles?: SubtitleEntry[] } } };
-          if (Array.isArray(json?.data?.subtitle?.subtitles)) {
-            entries = json.data.subtitle.subtitles;
+        if (!response.ok) {
+          subtitleDiscoveryErrors.push(`subtitle protobuf API HTTP ${response.status}`);
+        } else {
+          try {
+            entries = decodeSubtitleView(new Uint8Array(await response.arrayBuffer()));
+          } catch (cause) {
+            subtitleDiscoveryErrors.push(
+              `subtitle protobuf decode failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            );
           }
         }
-      } catch {
-        
+      } catch (cause) {
+        subtitleDiscoveryErrors.push(
+          `subtitle protobuf API request failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+      }
+    }
+    if (bvid && cid) {
+      if (entries.length === 0) {
+        try {
+          const response = await fetch(`https://api.bilibili.com/x/player/wbi/v2?bvid=${bvid}&cid=${cid}`, {
+            credentials: "include",
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) {
+            subtitleDiscoveryErrors.push(`player WBI API HTTP ${response.status}`);
+          } else {
+            const json = (await response.json()) as {
+              code?: number;
+              message?: string;
+              data?: {
+                need_login_subtitle?: boolean;
+                subtitle?: { subtitles?: SubtitleEntry[] };
+              };
+            };
+            if (json.code !== undefined && json.code !== 0) {
+              subtitleDiscoveryErrors.push(`player WBI API code ${json.code}: ${json.message ?? "missing data"}`);
+            } else {
+              subtitleLoginRequired = json.data?.need_login_subtitle === true;
+              if (Array.isArray(json?.data?.subtitle?.subtitles)) {
+                entries = json.data.subtitle.subtitles;
+              }
+            }
+          }
+        } catch (cause) {
+          subtitleDiscoveryErrors.push(
+            `player WBI API request failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          );
+        }
       }
     }
   }
 
   if (entries.length === 0) {
+    if (subtitleLoginRequired) {
+      return makeDegraded("subtitle-login-required", "player WBI API requires a logged-in Bilibili session");
+    }
+    if (subtitleDiscoveryErrors.length > 0) {
+      return makeDegraded("subtitle-fetch-failed", subtitleDiscoveryErrors.join("; "));
+    }
     return makeDegraded("no-subtitle");
   }
 
-  const preferred = entries.find((item) => /zh|中文|ai-zh/i.test(item.lan ?? "")) ?? entries[0];
+  const preferred =
+    entries.find((item) => /zh|中文|ai-zh/i.test(`${item.lan ?? ""} ${item.lan_doc ?? ""}`)) ?? entries[0];
   const rawUrl = preferred.subtitle_url ?? "";
   if (!rawUrl) {
-    return makeDegraded("no-subtitle");
+    return makeDegraded("subtitle-fetch-failed", "subtitle track is missing subtitle_url");
   }
-  const subtitleUrl = rawUrl.startsWith("http") ? rawUrl : `https:${rawUrl}`;
+  let decodedUrl: string;
+  try {
+    decodedUrl = decodeSubtitleUrl(rawUrl);
+  } catch (cause) {
+    return makeDegraded(
+      "subtitle-fetch-failed",
+      `subtitle URL decode failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+  const subtitleUrl = decodedUrl.startsWith("http") ? decodedUrl : `https:${decodedUrl}`;
   let body: { from?: number; to?: number; content?: string }[];
   try {
     const response = await fetch(subtitleUrl, {
-      credentials: "include",
+      // signed CDN URL 自带 auth_key。跨域请求携带 cookie 会触发 CORS credentials 校验，
+      // aisubtitle CDN 不需要也不应收到 B 站登录态。
+      credentials: "omit",
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) {
-      
-      return makeDegraded("subtitle-fetch-failed");
+      return makeDegraded("subtitle-fetch-failed", `subtitle file HTTP ${response.status}`);
     }
     const json = (await response.json()) as { body?: { from?: number; to?: number; content?: string }[] };
     body = Array.isArray(json.body) ? json.body : [];
-  } catch {
-    return makeDegraded("subtitle-fetch-failed");
+  } catch (cause) {
+    return makeDegraded(
+      "subtitle-fetch-failed",
+      `subtitle file request failed (aisubtitle CDN, credentials=omit): ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
   }
   const cues = body
     .filter((cue) => typeof cue?.content === "string" && cue.content.trim().length > 0)
@@ -473,7 +675,7 @@ export async function extractBilibiliSnapshot(): Promise<BilibiliSnapshotResult>
       text: (cue.content ?? "").trim(),
     }));
   if (cues.length === 0) {
-    return makeDegraded("no-subtitle");
+    return makeDegraded("subtitle-fetch-failed", "subtitle file contained no usable cues");
   }
   return { ok: true, url, title, author, cues };
 }
@@ -576,11 +778,13 @@ interface BuildInput {
   title: string;
   platform: string;
   contentType: ParserContentType;
-  blocks: { kind: ParserBlockKind; text: string; locator: ParserLocator }[];
+  blocks: { kind: ParserBlockKind; text: string; locator: ParserLocator; asset_ids?: string[] }[];
   jobId: string;
   author?: string | null;
   publishedAt?: string | null;
   warnings?: ParserProblem[];
+  /** 图片 OCR 等多模态产物（计划 §Task4.3），blocks 通过 asset_ids 引用。 */
+  assets?: ParserAsset[];
 }
 
 function normalizedBlockText(text: string): string {
@@ -649,10 +853,10 @@ export async function buildParserOutput(input: BuildInput): Promise<ParserOutput
       text: block.text,
       parent_block_id: null,
       locator: block.locator,
-      asset_ids: [],
+      asset_ids: block.asset_ids ?? [],
       metadata: {},
     })),
-    assets: [],
+    assets: input.assets ?? [],
     parse: {
       job_id: input.jobId,
       parser_name: "extension-snapshot",

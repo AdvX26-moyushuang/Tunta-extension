@@ -6,6 +6,7 @@
   "citations": [
     {
       "marker": 1,
+      "source_kind": "card",
       "card_id": "card:article:001",
       "source_id": "source:article:001",
       "block_id": "block:paragraph:002",
@@ -22,6 +23,7 @@
     },
     {
       "marker": 2,
+      "source_kind": "card",
       "card_id": "card:citation:002",
       "source_id": "source:article:001",
       "block_id": "block:paragraph:005",

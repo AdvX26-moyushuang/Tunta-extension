@@ -13,10 +13,14 @@ import type {
   BackendStatus,
   CaptureIntent,
   CaptureItem,
+  CardStateInfo,
   ChatHistoryEntry,
   ChatTurn,
   ConfirmProposalRequest,
   ConfirmProposalResponse,
+  EntityMentionInfo,
+  KaleidoscopeEdgeExplanation,
+  KaleidoscopeEntityGraph,
   KaleidoscopeGraph,
   KaleidoscopeRebuildResult,
   LibraryResponse,
@@ -25,6 +29,7 @@ import type {
   ReviewQueueResponse,
   SubmitCaptureRequest,
   SubmitCaptureResult,
+  UpdateCardStateRequest,
 } from "./contracts";
 
 /**
@@ -42,10 +47,20 @@ export interface TuntaApi {
   getStatus(): Promise<BackendStatus>;
   /** GET /api/library */
   getLibrary(): Promise<LibraryResponse>;
-  /** GET /api/kaleidoscope —— 万花筒知识图谱（来源节点 + LLM 关联边） */
+  /** GET /api/card-states —— 卡片用户状态全量（n 小，前端自行 join 卡片流，计划 §Task5.2） */
+  listCardStates(): Promise<CardStateInfo[]>;
+  /** POST /api/cards/{id}/state —— star/隐藏/笔记的部分更新，返回合并后全量状态 */
+  updateCardState(cardId: string, patch: UpdateCardStateRequest): Promise<CardStateInfo>;
+  /** GET /api/entity-mentions —— 实体 mention 全量（n 小，前端自行 join 卡片，计划 §Task5.3） */
+  listEntityMentions(): Promise<EntityMentionInfo[]>;
+  /** GET /api/kaleidoscope —— 来源视图（来源节点 + 实体共现派生的关联边） */
   getKaleidoscope(): Promise<KaleidoscopeGraph>;
-  /** POST /api/kaleidoscope/rebuild —— 清空全部关联边后逐对重算（N 个来源 = N-1 次 provider 调用） */
+  /** GET /api/kaleidoscope/entities —— 概念视图（万花筒默认，实体节点 + 共现边） */
+  getEntityGraph(): Promise<KaleidoscopeEntityGraph>;
+  /** POST /api/kaleidoscope/rebuild —— 实体共现纯计算重建（零 provider 调用） */
   rebuildKaleidoscope(): Promise<KaleidoscopeRebuildResult>;
+  /** POST /api/kaleidoscope/edges/{edgeId}/explain —— 边解释懒加载（命中缓存零 LLM，计划 §Task3.5） */
+  explainKaleidoscopeEdge(edgeId: string): Promise<KaleidoscopeEdgeExplanation>;
   /** POST /api/retrieve { query, top_k } —— 关键词 + 语义混合检索 */
   retrieve(query: string, topK?: number): Promise<RetrieveResponse>;
   /** POST /api/chat { query } —— 调用模式，产出 grounded answer（chat 0.2.0） */
@@ -64,8 +79,10 @@ export interface TuntaApi {
   retryCapture(captureId: string): Promise<CaptureItem>;
   /** POST /api/captures/{id}/archive —— 归档（常用内容归档需二次确认，由 UI 保证） */
   archiveCapture(captureId: string): Promise<void>;
-  /** GET /api/review/next —— 回看队列，带去重的随机策略 */
+  /** GET /api/review/next —— 回看队列，带去重的随机策略。纯读取，不改变任何状态 */
   getReviewNext(): Promise<ReviewQueueResponse>;
+  /** POST /api/review/{captureId}/seen —— 显式标记「这条我看过了」，只由用户操作触发 */
+  markReviewSeen(captureId: string): Promise<void>;
   /** POST /api/projects/confirm —— Chat proposal 的用户确认/抑制编排 */
   confirmProposal(request: ConfirmProposalRequest): Promise<ConfirmProposalResponse>;
   /** POST /api/admin/clear —— 清空本机知识库数据（收藏/原文/卡片/问答历史），保留 provider 设置 */
@@ -114,9 +131,21 @@ export function createRealApi(baseUrl: string): TuntaApi {
   return {
     getStatus: () => request<BackendStatus>("/api/status"),
     getLibrary: () => request<LibraryResponse>("/api/library"),
+    listCardStates: () => request<CardStateInfo[]>("/api/card-states"),
+    updateCardState: (cardId, patch) =>
+      request<CardStateInfo>(`/api/cards/${encodeURIComponent(cardId)}/state`, {
+        method: "POST",
+        body: JSON.stringify(patch),
+      }),
+    listEntityMentions: () => request<EntityMentionInfo[]>("/api/entity-mentions"),
     getKaleidoscope: () => request<KaleidoscopeGraph>("/api/kaleidoscope"),
+    getEntityGraph: () => request<KaleidoscopeEntityGraph>("/api/kaleidoscope/entities"),
     rebuildKaleidoscope: () =>
       request<KaleidoscopeRebuildResult>("/api/kaleidoscope/rebuild", { method: "POST" }),
+    explainKaleidoscopeEdge: (edgeId) =>
+      request<KaleidoscopeEdgeExplanation>(`/api/kaleidoscope/edges/${encodeURIComponent(edgeId)}/explain`, {
+        method: "POST",
+      }),
     retrieve: (query, topK = 8) =>
       request<RetrieveResponse>("/api/retrieve", {
         method: "POST",
@@ -152,6 +181,8 @@ export function createRealApi(baseUrl: string): TuntaApi {
         method: "POST",
       }),
     getReviewNext: () => request<ReviewQueueResponse>("/api/review/next"),
+    markReviewSeen: (captureId) =>
+      request<void>(`/api/review/${encodeURIComponent(captureId)}/seen`, { method: "POST" }),
     confirmProposal: (body) =>
       request<ConfirmProposalResponse>("/api/projects/confirm", {
         method: "POST",

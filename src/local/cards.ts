@@ -1,14 +1,19 @@
 import type { CardType } from "@/shared/api/contracts";
-import type { StoredCard, StoredDocument } from "./db";
+import { ENTITY_TYPES, type CardEntity, type EntityType, type StoredCard, type StoredDocument } from "./store/types.js";
 import type { ParserBlock } from "./parser";
-import { callChatCompletion, ProviderError } from "./provider";
+import { callChatCompletion, ProviderError } from "./provider.js";
 import type { LocalSettings } from "./settings";
-import { deduplicateCards, type CardWithoutId } from "./card-normalize";
+import { deduplicateCards, type CardWithoutId } from "./card-normalize.js";
 
 const CARD_TYPES: CardType[] = ["insight", "quote", "method", "question", "action"];
 
+// 实体字段让输出显著变长（计划 §Task3.1）：block 预算 12000→10000、max_tokens 6144→8192，
+// 否则长文档策展会开始随机触发 PROVIDER_TRUNCATED。
+const PROMPT_BLOCK_BUDGET = 10_000;
 
-const PROMPT_BLOCK_BUDGET = 12_000;
+const CURATION_MAX_TOKENS = 8192;
+
+const MAX_ENTITIES_PER_CARD = 5;
 
 const MAX_CARDS_PER_DOC = 8;
 
@@ -18,6 +23,30 @@ interface RawGeneratedCard {
   body?: unknown;
   evidence_block_ids?: unknown;
   domain_labels?: unknown;
+  entities?: unknown;
+}
+
+/**
+ * 实体抽取结果清洗（计划 §Task3.1）：type 限死六个值，越界丢弃；
+ * lower(name)+type 去重（与 Task3.2 的实体表唯一约束同口径）；每卡最多 5 个。
+ */
+export function toValidEntities(raw: unknown): CardEntity[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const entities: CardEntity[] = [];
+  for (const item of raw) {
+    const candidate = item as { name?: unknown; type?: unknown };
+    const name = typeof candidate?.name === "string" ? candidate.name.trim() : "";
+    if (!name || name.length > 40) continue;
+    if (!ENTITY_TYPES.includes(candidate?.type as EntityType)) continue;
+    const type = candidate.type as EntityType;
+    const key = `${name.toLowerCase()}\u0000${type}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entities.push({ name, type });
+    if (entities.length >= MAX_ENTITIES_PER_CARD) break;
+  }
+  return entities;
 }
 
 
@@ -72,13 +101,14 @@ const CURATION_SYSTEM_PROMPT = `你是 Tunta 收藏库的策展人。用户收�
 - 证据必须引用真实存在的 block_id，至少 1 条；可以合并多个相邻 block 作为共同证据；不得编造 block_id
 - 忽略页眉页脚、导航、相关推荐、按钮文案等噪声块，它们不应出现在证据里
 - domain_labels 给 1-3 个领域标签（如 个人知识管理、前端工程）
+- entities 抽取卡片里的关键实体，0~5 个；type 只能是 person（人物）、concept（概念）、tool（工具/产品）、method（方法论）、work（作品/文章/书）、org（组织/公司）之一；name 用原文里的规范叫法，不要自己改写
 
 同时给出来源元数据（worth_keeping=false 时也要给）：
 - source.title：干净准确的来源标题，去除站点后缀（如「_哔哩哔哩_bilibili」）、营销词与导航噪声，不超过 40 字
 - source.summary：一句话说明这段内容讲了什么，不超过 60 字
 
 只输出 JSON 对象，不要输出任何其他文字：
-{"source":{"title":"来源标题","summary":"一句话摘要"},"assessment":{"worth_keeping":true或false,"reason":"一句话理由"},"cards":[{"card_type":"insight|quote|method|question|action","title":"卡片标题","body":"卡片正文（忠于原文，可适度压缩）","evidence_block_ids":["block:paragraph:001"],"domain_labels":["标签"]}]}
+{"source":{"title":"来源标题","summary":"一句话摘要"},"assessment":{"worth_keeping":true或false,"reason":"一句话理由"},"cards":[{"card_type":"insight|quote|method|question|action","title":"卡片标题","body":"卡片正文（忠于原文，可适度压缩）","evidence_block_ids":["block:paragraph:001"],"domain_labels":["标签"],"entities":[{"name":"约束","type":"concept"}]}]}
 worth_keeping=false 时 cards 输出空数组。`;
 
 function toValidCard(raw: unknown, blocks: ParserBlock[], doc: StoredDocument): CardWithoutId | null {
@@ -101,6 +131,7 @@ function toValidCard(raw: unknown, blocks: ParserBlock[], doc: StoredDocument): 
     body: candidate.body.trim(),
     domainLabels: labels,
     evidence: evidenceIds.slice(0, 3).map((id) => ({ blockId: id, quote: blockById.get(id)?.text.slice(0, 160) ?? null })),
+    entities: toValidEntities(candidate.entities),
     embedding: null,
     createdAt: new Date().toISOString(),
   };
@@ -136,7 +167,7 @@ export async function generateCardsForDocument(settings: LocalSettings, doc: Sto
     throw new ProviderError("文档没有可用 blocks，无法生成卡片。", "CARDS_NO_BLOCKS");
   }
   
-  const answer = await callChatCompletion(settings.chat, CURATION_SYSTEM_PROMPT, buildPrompt(doc), 6144);
+  const answer = await callChatCompletion(settings.chat, CURATION_SYSTEM_PROMPT, buildPrompt(doc), CURATION_MAX_TOKENS);
   const raw = extractJsonObject(answer);
   const source = toSourceMeta(raw.source);
   const assessmentRaw = (raw.assessment ?? {}) as { worth_keeping?: unknown; reason?: unknown };
@@ -150,7 +181,7 @@ export async function generateCardsForDocument(settings: LocalSettings, doc: Sto
     .slice(0, MAX_CARDS_PER_DOC)
     .map((item) => toValidCard(item, blocks, doc))
     .filter((card): card is CardWithoutId => card !== null);
-  const normalized = deduplicateCards(validCards, doc.sourceId);
+  const normalized = await deduplicateCards(validCards, doc.sourceId);
   const cards = normalized.cards;
   if (normalized.duplicateCount > 0) {
     console.warn(
