@@ -109,7 +109,9 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
                 id: edge.edgeId,
                 source: edge.aId,
                 target: edge.bId,
-                label: `共现 ${edge.cooccurCount}`,
+                // 概念图只有「共现」一种关系，边上不写字：线的粗细已经表达强度，
+                // 文字只会和节点标签抢位置。等真有多种关系类型了再加回来。
+                label: "",
                 strength: edge.strength,
               },
             })),
@@ -177,12 +179,24 @@ export function KaleidoscopePage({ onToast }: KaleidoscopePageProps) {
           },
         },
       ],
+      /*
+       * 概念图节点多、标签长，原参数（repulsion 12000 / edge 150）会把节点挤成
+       * 一团：9 节点实测最近中心距只有 41px，而节点直径最大 58px——直接压在一起。
+       *
+       * 下面这组实测最近中心距 74px，同时长宽比最接近画布，fit 后几乎不缩小。
+       * 单纯把 repulsion 调更大会把图拉成细高条，反而在横向画布里显得更小，
+       * 所以 gravity 要跟着往回收。
+       */
       layout: {
         name: "cose",
         animate: true,
-        nodeRepulsion: 12_000,
+        nodeRepulsion: 26_000,
         idealEdgeLength: 150,
-        padding: 48,
+        componentSpacing: 120,
+        nodeOverlap: 20,
+        gravity: 1.2,
+        numIter: 1500,
+        padding: 56,
       },
       wheelSensitivity: 0.2,
       boxSelectionEnabled: false,

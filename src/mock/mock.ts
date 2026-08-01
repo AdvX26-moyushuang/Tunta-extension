@@ -353,7 +353,7 @@ export function createMockApi(): TuntaApi {
       return delay<ReviewQueueResponse>({ item: null, remaining: 0 });
     }
 
-    reviewSeen.add(selection.candidate.capture.captureId);
+    // 与 local 一致：取下一张是纯读取，seen 由 markReviewSeen 显式写
     const capture = selection.candidate.capture;
     const card = selection.candidate.cards[0];
     return delay<ReviewQueueResponse>({
@@ -565,6 +565,11 @@ export function createMockApi(): TuntaApi {
     },
 
     getReviewNext,
+
+    markReviewSeen: (captureId) => {
+      reviewSeen.add(captureId);
+      return delay<void>(undefined, 0);
+    },
 
     confirmProposal: (request) => {
       const mode: ProjectProposalMode = chatAnsweredGo.project_proposal.mode as ProjectProposalMode;

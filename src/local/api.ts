@@ -308,7 +308,9 @@ async function loadLocalReviewNext(): Promise<ReviewQueueResponse> {
     return { item: null, remaining: 0 };
   }
 
-  saveReviewSeen(selection.seen);
+  // 这里**不能**写 seen：取下一张是纯读取。
+  // 写在这里意味着打开回看页就把这条标记成已看过——用户什么都没点，
+  // 甚至刷新一次页面就会连续消耗队列。标记改由「下一条」显式触发。
   const { capture, cards } = selection.candidate;
   const doc = capture.sourceId ? await getStore().getDocument(capture.sourceId) : undefined;
   const first = cards[0];
@@ -722,6 +724,13 @@ export function createLocalApi(): TuntaApi {
     },
 
     getReviewNext,
+
+    markReviewSeen: async (captureId: string): Promise<void> => {
+      const seen = loadReviewSeen();
+      if (seen.has(captureId)) return;
+      seen.add(captureId);
+      saveReviewSeen(seen);
+    },
 
     confirmProposal: async (): Promise<ConfirmProposalResponse> => {
       

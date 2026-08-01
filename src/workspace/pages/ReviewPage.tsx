@@ -48,14 +48,26 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
     };
   }, [loadNext]);
 
+  /**
+   * 「已看过」只在用户主动跳过时写入。取下一张本身是纯读取——
+   * 否则光是打开这一页（或刷新）就会静默消耗回看队列。
+   */
   const skip = useCallback(() => {
     if (state !== "ready" || !item || leaving) return;
+    const captureId = item.capture.captureId;
     setLeaving("left");
     transitionTimer.current = window.setTimeout(() => {
       transitionTimer.current = null;
-      void loadNext();
+      void (async () => {
+        try {
+          await getApi().markReviewSeen(captureId);
+        } catch (error) {
+          onToast(`标记已看过失败：${error instanceof Error ? error.message : String(error)}`);
+        }
+        await loadNext();
+      })();
     }, 210);
-  }, [item, leaving, loadNext, state]);
+  }, [item, leaving, loadNext, onToast, state]);
 
   const archive = useCallback(async () => {
     if (state !== "ready" || !item || leaving) return;

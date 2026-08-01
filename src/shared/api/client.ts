@@ -79,8 +79,10 @@ export interface TuntaApi {
   retryCapture(captureId: string): Promise<CaptureItem>;
   /** POST /api/captures/{id}/archive —— 归档（常用内容归档需二次确认，由 UI 保证） */
   archiveCapture(captureId: string): Promise<void>;
-  /** GET /api/review/next —— 回看队列，带去重的随机策略 */
+  /** GET /api/review/next —— 回看队列，带去重的随机策略。纯读取，不改变任何状态 */
   getReviewNext(): Promise<ReviewQueueResponse>;
+  /** POST /api/review/{captureId}/seen —— 显式标记「这条我看过了」，只由用户操作触发 */
+  markReviewSeen(captureId: string): Promise<void>;
   /** POST /api/projects/confirm —— Chat proposal 的用户确认/抑制编排 */
   confirmProposal(request: ConfirmProposalRequest): Promise<ConfirmProposalResponse>;
   /** POST /api/admin/clear —— 清空本机知识库数据（收藏/原文/卡片/问答历史），保留 provider 设置 */
@@ -179,6 +181,8 @@ export function createRealApi(baseUrl: string): TuntaApi {
         method: "POST",
       }),
     getReviewNext: () => request<ReviewQueueResponse>("/api/review/next"),
+    markReviewSeen: (captureId) =>
+      request<void>(`/api/review/${encodeURIComponent(captureId)}/seen`, { method: "POST" }),
     confirmProposal: (body) =>
       request<ConfirmProposalResponse>("/api/projects/confirm", {
         method: "POST",
