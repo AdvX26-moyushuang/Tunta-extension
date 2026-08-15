@@ -1707,7 +1707,7 @@ body {
 /* ---------- evidence trace ---------- */
 
 /* 和收藏库同一套：底板 + 行卡片 + 间距，靠留白分行而不是分割线 */
-.trace-table {
+.trace-list {
   display: grid;
   gap: 9px;
   padding: 14px;
@@ -1715,37 +1715,112 @@ body {
   background: var(--surface-sunken);
 }
 
-.trace-row {
-  display: grid;
-  grid-template-columns: 92px minmax(170px, 0.9fr) minmax(260px, 1.5fr) 120px;
-  gap: 20px;
-  align-items: start;
-  padding: 18px 20px;
+/* 一个来源一条 item；卡片与引文都收在展开区里 */
+.trace-item {
   border-radius: var(--r-md);
   background: var(--paper-bright);
   box-shadow: var(--shadow-card);
   font-size: var(--text-sm);
 }
 
-.trace-row.header {
-  padding: 6px 20px 8px;
+.trace-item-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 0;
+  border-radius: var(--r-md);
   background: transparent;
-  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 反馈只加填充，不抬升、不位移 */
+.trace-item-head:hover {
+  background: var(--fill-neutral-hover);
+}
+
+.trace-item-head:active {
+  background: var(--fill-neutral-active);
+}
+
+.trace-item-text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.trace-item-title {
+  overflow: hidden;
+  font-size: var(--text-base);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-item-meta {
   color: var(--muted);
   font-size: var(--text-xs);
 }
 
+.trace-caret {
+  flex: none;
+  color: var(--muted);
+}
+
+.trace-item-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 20px 18px;
+}
+
+.trace-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--r-sm);
+  background: var(--surface-sunken);
+}
+
+.trace-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trace-evidence {
+  display: grid;
+  gap: 3px;
+}
+
+.trace-evidence-meta {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* 悬空引用是数据缺陷，走语义红 */
+.trace-warn {
+  margin-left: 8px;
+  color: var(--red);
+}
+
 /*
- * block 类型是每行都有的元数据，不是「你在哪」。原来它是实心品牌蓝，
+ * 类型是每行都有的元数据，不是「你在哪」。原来它是实心品牌蓝，
  * 一屏重复十几次，蓝色被降格成了装饰。中性标签即可。
  */
 .trace-kind {
   display: inline-flex;
+  flex: none;
   width: fit-content;
   padding: 5px 8px;
   border-radius: var(--r-pill);
   background: var(--fill-neutral);
   color: var(--ink);
+  font-size: var(--text-xs);
 }
 
 /* 链接仍然是蓝：可点的东西归 brand 色管 */
@@ -2525,13 +2600,12 @@ body {
     display: none;
   }
 
-  .trace-row {
-    grid-template-columns: 72px minmax(0, 1fr);
-    padding: 15px;
+  .trace-item-head {
+    padding: 14px 15px;
   }
 
-  .trace-row > :nth-child(n + 3) {
-    display: none;
+  .trace-item-body {
+    padding: 0 15px 15px;
   }
 
   .settings-grid {
