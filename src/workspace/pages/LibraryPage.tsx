@@ -9,8 +9,10 @@ import type {
   LibraryResponse,
   UpdateCardStateRequest,
 } from "@/shared/api/contracts";
+import { CAPTURE_INTENT_OPTIONS } from "@/shared/api/contracts";
 import { formatTime } from "@/shared/format";
 import { openExternal } from "@/shared/browser";
+import { Select } from "@/shared/components/Select";
 import { StatusChip } from "@/shared/components/StatusChip";
 import { CARD_TYPE_LABELS, KnowledgeCard } from "@/shared/components/KnowledgeCard";
 
@@ -181,19 +183,13 @@ function CardFeedView({ onToast }: { onToast: (message: string) => void }) {
           </button>
         ))}
         {allLabels.length > 0 && (
-          <select
+          <Select
             className="library-label-select"
+            label="按标签筛选"
             value={labelFilter ?? ""}
-            aria-label="按标签筛选"
-            onChange={(event) => setLabelFilter(event.target.value || null)}
-          >
-            <option value="">全部标签</option>
-            {allLabels.map((label) => (
-              <option key={label} value={label}>
-                {label}
-              </option>
-            ))}
-          </select>
+            options={[{ value: "", label: "全部标签" }, ...allLabels.map((label) => ({ value: label, label }))]}
+            onChange={(next) => setLabelFilter(next || null)}
+          />
         )}
         <label className="library-hidden-toggle">
           <input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} />
@@ -238,21 +234,21 @@ function CardFeedView({ onToast }: { onToast: (message: string) => void }) {
               >
                 <button
                   type="button"
-                  className={`filter-chip ${state?.starred ? "active" : ""}`}
+                  className={`card-action ${state?.starred ? "is-on" : ""}`}
                   onClick={() => void patchState(card.cardId, { starred: !state?.starred })}
                 >
                   {state?.starred ? "★ 已星标" : "☆ 星标"}
                 </button>
                 <button
                   type="button"
-                  className="filter-chip"
+                  className="card-action"
                   onClick={() => void patchState(card.cardId, { hidden: !state?.hidden })}
                 >
                   {state?.hidden ? "取消隐藏" : "隐藏"}
                 </button>
                 <button
                   type="button"
-                  className="filter-chip"
+                  className="card-action"
                   onClick={() => {
                     setNoteEditingId(card.cardId);
                     setNoteDraft(state?.userNote ?? "");
@@ -514,15 +510,13 @@ function CaptureStatusTable({ onToast }: { onToast: (message: string) => void })
           <div className="capture-url" title={capture.url}>
             {capture.url}
           </div>
-          <select
+          <Select
             className="capture-intent"
+            label="收藏意图"
             value={capture.intent}
-            aria-label="收藏意图"
-            onChange={(event) => void updateIntent(capture, event.target.value as CaptureIntent)}
-          >
-            <option value="pending">待消化</option>
-            <option value="favorite">常用</option>
-          </select>
+            options={CAPTURE_INTENT_OPTIONS}
+            onChange={(next) => void updateIntent(capture, next as CaptureIntent)}
+          />
           <StatusChip status={capture.status} />
           <span className="capture-url">{formatTime(capture.createdAt)}</span>
           <div className="capture-actions">

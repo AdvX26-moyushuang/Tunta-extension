@@ -80,7 +80,19 @@
   --text-base: 15px;
   --text-lg: 17px;
 
-  /* 圆角阶梯：嵌套时外层比内层大一档。 */
+  /*
+   * 圆角阶梯：嵌套时外层比内层大一档（外 = 内 + padding）。
+   *
+   * 形状承担语义，不要全页一律药丸：
+   *   --r-pill  只留给「只读标签」——status-chip / card-type / trace-kind /
+   *             citation-kind / signal / domain-pill 这类不可点的词块。
+   *             药丸只出现在这里，它才重新变成「这不是控件」的信号。
+   *   --r-xs    小号交互控件：filter chip、小 select、segmented 里的分段（28-32px 高）
+   *   --r-sm    按钮（36-44px 高）
+   *   --r-md/lg 输入框、面板、卡片
+   * 新组件挑档位看高度和角色，别默认写 --r-pill。
+   */
+  --r-xs: 8px;
   --r-sm: 10px;
   --r-md: 16px;
   --r-lg: 24px;
@@ -99,6 +111,30 @@
   --fill-control-hover: var(--brand-water-soft);
   --fill-control-active: #c3d9e8;
   --fill-danger: #fbe4e0;
+
+  /*
+   * 中性控件填充（暖色半透明）。
+   *
+   * 之前 workspace 的 --btn-background 是 #FFFAF0 不透明奶白：压在沙纸
+   * (#f5f0e8) 上只差 3% 明度，压在 paper-bright (#fffaf2) 顶栏上几乎是同色，
+   * 于是按钮和未选中 chip 都退化成一段浮着的文字，没有控件形状。
+   * 改成 otter 的低透明度叠加后，同一个 token 在两种纸面上都能自动拉开
+   * 一档明度，也依然是「靠填充不靠描边」。
+   */
+  --fill-neutral: #FFFAF1;
+  --fill-neutral-hover: #F0ECE4;
+  --fill-neutral-active: rgba(119, 85, 55, 0.2);
+
+  /*
+   * 凹面底板：表格 / 列表的衬底，用来把一排纸片托起来。
+   * 之前这些底板一律是 --brand-water-pale，于是每屏都出现「蓝 hero + 蓝底板」
+   * 两块大蓝，蓝色从 brand 掉成了默认背景色。底板本身没有语义，走中性暖色。
+   * 颜色分工见 AGENTS.md §配色。
+   */
+  --surface-sunken: rgba(119, 85, 55, 0.06);
+
+  /* 遮罩：走 elevation 的暖阴影色，不要用品牌蓝当纱 */
+  --scrim: rgb(var(--shadow-rgb) / 0.34);
 
   /*
    * 已移除 --lift（hover 时 translateY(-2px) + 0 5px 14px 软投影）。

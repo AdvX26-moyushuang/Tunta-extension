@@ -336,6 +336,12 @@ export interface RetrieveResponse {
 /** 收藏意图：待消化（进入回看队列）或 常用（独立入口，不参与默认清理）。 */
 export type CaptureIntent = "pending" | "favorite";
 
+/** 顶栏与收藏库共用同一份意图选项，避免两处文案漂移。 */
+export const CAPTURE_INTENT_OPTIONS: { value: CaptureIntent; label: string }[] = [
+  { value: "pending", label: "待消化" },
+  { value: "favorite", label: "常用" },
+];
+
 /**
  * 处理状态。README 要求对用户可见的五态：idle / fetching / parsing / done / failed。
  * backend 内部的 ready / archived 也映射到这组 UI 状态。

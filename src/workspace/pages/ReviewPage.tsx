@@ -110,16 +110,15 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
       <div className="review-stage">
         {state === "ready" && item ? (
           <>
-            {/* 蓝条是这行字的衬底，两者叠在同一个格子里 */}
+            {/* 进度文字在上，纸边在下——纸边紧贴卡片，才读成「下面还有一张」 */}
             <div className="review-banner">
-              <div className="card-shadow" aria-hidden="true" />
-              <div className="review-meta">待消化剩余 {remaining} 条 · ← 下一条 · → 归档</div>
+              <div className="review-meta"> {remaining} 张 新的卡片</div>
             </div>
             <div className="card-stack">
               <KnowledgeCard
                 density="full"
                 card={item.card}
-                meta={`${hostOf(item.originalUrl)} · 收藏于 ${formatTime(item.capture.createdAt)}`}
+                meta={`${formatTime(item.capture.createdAt)}`}
                 className={leaving ? `leave-${leaving}` : ""}
               >
                 <button
@@ -142,10 +141,6 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
             {/* actions 留在 card-stack 之外：card-shadow 锚在 stack 底部，
                 包进来会让那两道蓝色衬条压到按钮上 */}
             <div className="card-actions">
-              <button type="button" className="action-button" onClick={() => void openExternal(item.originalUrl)}>
-                <span>查看原文</span>
-                <span className="keycap">↗</span>
-              </button>
               <button type="button" className="action-button secondary" onClick={skip} disabled={leaving != null}>
                 <span>下一条</span>
                 <span className="keycap">←</span>

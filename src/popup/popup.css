@@ -9,7 +9,8 @@ body {
   --paper: var(--brand-sand);
   --paper-bright: #fffaf2;
   --ink: var(--brand-otter);
-  --muted: #8b725d;
+  /* 与 workspace 同步：#8b725d 在纸面上过不了 AA，见 workspace.css 的说明 */
+  --muted: #7a6250;
   --line: rgba(119, 85, 55, 0.17);
   --line-strong: rgba(119, 85, 55, 0.4);
   --acid: var(--brand-sun);
@@ -31,7 +32,7 @@ body {
   min-height: 36px;
   padding: 8px 15px;
   border: 0;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   background: var(--fill-control);
   box-shadow: none;
   color: var(--brand-water-deep);
@@ -255,7 +256,7 @@ body {
   padding: 12px;
   cursor: pointer;
   border: 0;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   background: var(--brand-sun);
   color: var(--ink);
   font-size: var(--text-sm);
@@ -338,7 +339,7 @@ body {
   padding: 5px 11px;
   cursor: pointer;
   border: 1px solid rgba(43, 122, 179, 0.3);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-xs);
   background: rgba(255, 250, 242, 0.82);
   color: var(--brand-water-deep);
   font-size: var(--text-xs);

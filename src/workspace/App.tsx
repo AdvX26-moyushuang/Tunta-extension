@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { getApi } from "@/shared/api";
 import type { BackendStatus, CaptureIntent } from "@/shared/api/contracts";
+import { CAPTURE_INTENT_OPTIONS } from "@/shared/api/contracts";
 import { isValidUrl } from "@/shared/format";
 import { readClipboardText } from "@/shared/browser";
+import { Select } from "@/shared/components/Select";
 import { StatusChip } from "@/shared/components/StatusChip";
 import { Toast, useToast } from "@/shared/components/Toast";
 import { useCaptureTracking } from "@/shared/useCaptureTracking";
@@ -206,10 +208,12 @@ function CaptureBar({ onToast }: { onToast: (message: string) => void }) {
         placeholder="粘贴 URL 收藏：B 站视频（字幕优先）或普通网页"
         aria-label="收藏 URL"
       />
-      <select value={intent} onChange={(event) => setIntent(event.target.value as CaptureIntent)} aria-label="收藏意图">
-        <option value="pending">待消化</option>
-        <option value="favorite">常用</option>
-      </select>
+      <Select
+        label="收藏意图"
+        value={intent}
+        options={CAPTURE_INTENT_OPTIONS}
+        onChange={(next) => setIntent(next as CaptureIntent)}
+      />
       <button type="button" className="btn" onClick={() => void pasteClipboard()}>
         读剪贴板
       </button>
