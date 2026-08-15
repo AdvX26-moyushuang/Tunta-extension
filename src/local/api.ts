@@ -19,6 +19,7 @@ import type {
   LibrarySource,
   PageSnapshot,
   RetrieveResponse,
+  ReviewMode,
   ReviewQueueResponse,
   SubmitCaptureRequest,
   SubmitCaptureResult,
@@ -332,11 +333,59 @@ async function loadLocalReviewNext(): Promise<ReviewQueueResponse> {
   };
 }
 
+/**
+ * 漫游：在全卡库里随机抽一张，不看 seen / archived / intent。
+ * 隐藏的卡片除外——Library 里点了隐藏就是不想再遇到它。
+ * 没有对应收藏记录的卡片会被跳过：卡片本体给不出原文入口与归档目标。
+ */
+async function loadLocalRoamNext(): Promise<ReviewQueueResponse> {
+  const store = getStore();
+  const [cards, states, captures] = await Promise.all([
+    store.listCards(),
+    store.listCardStates(),
+    store.listCaptures(),
+  ]);
+  const hidden = new Set(states.filter((state) => state.hidden).map((state) => state.cardId));
+  const captureBySource = new Map<string, StoredCapture>();
+  for (const capture of captures) {
+    if (capture.sourceId && !captureBySource.has(capture.sourceId)) {
+      captureBySource.set(capture.sourceId, capture);
+    }
+  }
 
+  const pool = cards.filter((card) => !hidden.has(card.cardId) && captureBySource.has(card.sourceId));
+  if (pool.length === 0) return { item: null, remaining: 0 };
 
+  const card = pool[Math.floor(Math.random() * pool.length)];
+  const capture = toPublicCapture(captureBySource.get(card.sourceId)!);
+  const doc = await store.getDocument(card.sourceId);
+  return {
+    item: {
+      capture,
+      card: {
+        cardId: card.cardId,
+        cardType: card.cardType,
+        title: card.title,
+        body: card.body,
+        domainLabels: card.domainLabels,
+        evidence: card.evidence,
+        source: doc ? sourceWithCuration(doc) : undefined,
+        createdAt: card.createdAt,
+      },
+      originalUrl: capture.url,
+    },
+    // 漫游没有「剩几张」，给的是可漫游总量
+    remaining: pool.length,
+  };
+}
 
 export function createLocalApi(): TuntaApi {
-  const getReviewNext = createSingleFlight(loadLocalReviewNext);
+  // 两种口径各自 single-flight：并发去重不该让 new / all 互相盖掉
+  const reviewFlights: Record<ReviewMode, () => Promise<ReviewQueueResponse>> = {
+    new: createSingleFlight(loadLocalReviewNext),
+    all: createSingleFlight(loadLocalRoamNext),
+  };
+  const getReviewNext = (mode: ReviewMode = "new") => reviewFlights[mode]();
   return {
     getStatus: async (): Promise<BackendStatus> => {
       const settings = await loadSettings();

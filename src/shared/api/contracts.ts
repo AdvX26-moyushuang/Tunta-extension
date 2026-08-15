@@ -440,8 +440,16 @@ export interface ReviewItem {
   originalUrl: string;
 }
 
+/**
+ * 回看的两种取卡口径：
+ * - new：待消化队列（pending / 未归档 / 未看过），一张卡消费一条收藏
+ * - all：全卡库漫游，忽略已看过与归档，随机抽一张（隐藏的卡除外）
+ */
+export type ReviewMode = "new" | "all";
+
 export interface ReviewQueueResponse {
   item: ReviewItem | null;
+  /** new：队列里除当前这张外还剩几张；all：可漫游的卡片总数 */
   remaining: number;
 }
 

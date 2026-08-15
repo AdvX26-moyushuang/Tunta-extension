@@ -607,22 +607,13 @@ body {
 }
 
 /*
- * 原来这里是「一条蓝带 + 白字压在上面」。蓝色去掉之后，那条带子只剩
- * 一块夹在页面和卡片中间的中性色，既不是纸也不是底，还离卡片 50px 远，
- * 读起来就是块污渍。
- *
- * 拆开：进度那行字回到井底当普通说明文字，「还有下一张」交给一条紧贴
- * 卡片上沿的纸边——它是卡片，所以它就该是纸色。
+ * 卡片上方原来有一行进度文字（「还有 N 张」）。计数搬到 tab 上之后它就是
+ * 同一个数字说两遍，整条 banner 一起撤掉——tab 既是切换也是计数。
  */
-.review-banner {
-  position: relative;
+.review-tabs {
   z-index: 1;
-  display: flex;
-  width: min(652px, calc(100% - 28px));
-  flex-direction: column;
-  align-items: center;
-  gap: 18px;
-  margin-bottom: 0;
+  margin-top: 0;
+  margin-bottom: 22px;
 }
 
 .card-shadow {
@@ -1207,21 +1198,14 @@ body {
   color: var(--brand-otter);
 }
 
-/* 进度说明：井底的普通辅助文字，不需要自己的衬底 */
-.review-meta {
-  position: relative;
-  z-index: 1;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  text-align: center;
-}
-
 /* ---------- recall / search ---------- */
 
 .search-box {
   display: grid;
   max-width: 960px;
-  grid-template-columns: minmax(0, 1fr) 58px;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-right: 9px;
   overflow: hidden;
   border: 0;
   border-radius: var(--r-md);
@@ -1243,12 +1227,20 @@ body {
   font-size: var(--text-base);
 }
 
+/*
+ * 检索按钮是「贴在输入条里的图标键」，不是右半边的整块色板：
+ * 圆形只比放大镜大一圈，静息中性，把实心黄让给顶栏的「收藏」——
+ * 同屏两块大黄的时候，黄就不再是焦点。
+ */
 .search-box button {
   display: grid;
+  width: 36px;
+  height: 36px;
   cursor: pointer;
   place-items: center;
   border: 0;
-  background: var(--brand-sun);
+  border-radius: var(--r-pill);
+  background: transparent;
   color: var(--ink);
   transition: background 140ms ease;
 }
@@ -1262,8 +1254,18 @@ body {
   stroke-width: 1.8;
 }
 
+/* 主操作的 hover：浅黄点一下「此刻该动这里」，按下才落到实心黄 */
 .search-box button:hover:not(:disabled) {
-  background: var(--brand-water-soft);
+  background: var(--brand-sun-pale);
+}
+
+.search-box button:active:not(:disabled) {
+  background: var(--brand-sun);
+}
+
+.search-box button:focus-visible {
+  outline: 0;
+  box-shadow: var(--outline-focus);
 }
 
 .search-box button:disabled {
@@ -1707,7 +1709,7 @@ body {
 /* ---------- evidence trace ---------- */
 
 /* 和收藏库同一套：底板 + 行卡片 + 间距，靠留白分行而不是分割线 */
-.trace-table {
+.trace-list {
   display: grid;
   gap: 9px;
   padding: 14px;
@@ -1715,37 +1717,112 @@ body {
   background: var(--surface-sunken);
 }
 
-.trace-row {
-  display: grid;
-  grid-template-columns: 92px minmax(170px, 0.9fr) minmax(260px, 1.5fr) 120px;
-  gap: 20px;
-  align-items: start;
-  padding: 18px 20px;
+/* 一个来源一条 item；卡片与引文都收在展开区里 */
+.trace-item {
   border-radius: var(--r-md);
   background: var(--paper-bright);
   box-shadow: var(--shadow-card);
   font-size: var(--text-sm);
 }
 
-.trace-row.header {
-  padding: 6px 20px 8px;
+.trace-item-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 0;
+  border-radius: var(--r-md);
   background: transparent;
-  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 反馈只加填充，不抬升、不位移 */
+.trace-item-head:hover {
+  background: var(--fill-neutral-hover);
+}
+
+.trace-item-head:active {
+  background: var(--fill-neutral-active);
+}
+
+.trace-item-text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.trace-item-title {
+  overflow: hidden;
+  font-size: var(--text-base);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-item-meta {
   color: var(--muted);
   font-size: var(--text-xs);
 }
 
+.trace-caret {
+  flex: none;
+  color: var(--muted);
+}
+
+.trace-item-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 20px 18px;
+}
+
+.trace-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--r-sm);
+  background: var(--surface-sunken);
+}
+
+.trace-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trace-evidence {
+  display: grid;
+  gap: 3px;
+}
+
+.trace-evidence-meta {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* 悬空引用是数据缺陷，走语义红 */
+.trace-warn {
+  margin-left: 8px;
+  color: var(--red);
+}
+
 /*
- * block 类型是每行都有的元数据，不是「你在哪」。原来它是实心品牌蓝，
+ * 类型是每行都有的元数据，不是「你在哪」。原来它是实心品牌蓝，
  * 一屏重复十几次，蓝色被降格成了装饰。中性标签即可。
  */
 .trace-kind {
   display: inline-flex;
+  flex: none;
   width: fit-content;
   padding: 5px 8px;
   border-radius: var(--r-pill);
   background: var(--fill-neutral);
   color: var(--ink);
+  font-size: var(--text-xs);
 }
 
 /* 链接仍然是蓝：可点的东西归 brand 色管 */
@@ -2525,13 +2602,12 @@ body {
     display: none;
   }
 
-  .trace-row {
-    grid-template-columns: 72px minmax(0, 1fr);
-    padding: 15px;
+  .trace-item-head {
+    padding: 14px 15px;
   }
 
-  .trace-row > :nth-child(n + 3) {
-    display: none;
+  .trace-item-body {
+    padding: 0 15px 15px;
   }
 
   .settings-grid {
