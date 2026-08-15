@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getApi } from "@/shared/api";
-import type { ReviewItem } from "@/shared/api/contracts";
+import type { ReviewItem, ReviewMode } from "@/shared/api/contracts";
 import { formatTime, hostOf } from "@/shared/format";
 import { openExternal } from "@/shared/browser";
 import { KnowledgeCard } from "@/shared/components/KnowledgeCard";
@@ -12,45 +12,68 @@ interface ReviewPageProps {
 type LoadState = "loading" | "ready" | "empty";
 
 /**
- * 回看模式（DEV.md §5.2）：随机呈现一条待消化收藏，
- * 支持查看原文、下一条、归档；选取逻辑为带去重的随机策略（backend 侧）。
+ * 回看模式（DEV.md §5.2）：随机呈现一张卡片，支持查看原文、下一条、归档。
+ *
+ * 两种取卡口径，用 tab 切换：
+ * - New：待消化队列，一张卡消费一条收藏，「下一条」写「已看过」
+ * - All：全卡库漫游，忽略已看过与归档，「下一条」只是重新随机，不消耗队列
  */
 export function ReviewPage({ onToast }: ReviewPageProps) {
+  const [mode, setMode] = useState<ReviewMode>("new");
   const [state, setState] = useState<LoadState>("loading");
   const [item, setItem] = useState<ReviewItem | null>(null);
-  const [remaining, setRemaining] = useState(0);
+  /** New 队列的待办数，切到 All 之后 tab 上仍要显示 */
+  const [newCount, setNewCount] = useState(0);
   const [leaving, setLeaving] = useState<"left" | "right" | null>(null);
   const transitionTimer = useRef<number | null>(null);
 
-  const loadNext = useCallback(async () => {
-    setState("loading");
-    setLeaving(null);
-    try {
-      const response = await getApi().getReviewNext();
-      setItem(response.item);
-      setRemaining(response.remaining);
-      setState(response.item ? "ready" : "empty");
-    } catch (error) {
-      setItem(null);
-      setRemaining(0);
-      setState("empty");
-      onToast(`回看队列加载失败：${error instanceof Error ? error.message : String(error)}`);
-    }
-  }, [onToast]);
+  const loadNext = useCallback(
+    async (target: ReviewMode) => {
+      setState("loading");
+      setLeaving(null);
+      try {
+        const response = await getApi().getReviewNext(target);
+        setItem(response.item);
+        if (target === "new") {
+          // remaining 是「除当前这张外还剩几张」，tab 上要显示队列里的总数
+          setNewCount(response.remaining + (response.item ? 1 : 0));
+        }
+        setState(response.item ? "ready" : "empty");
+      } catch (error) {
+        setItem(null);
+        setState("empty");
+        onToast(`回看加载失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+    [onToast],
+  );
 
   useEffect(() => {
-    void loadNext();
+    void loadNext(mode);
+  }, [loadNext, mode]);
+
+  // New 队列的计数在 All 模式下也要保持新鲜（归档/看过都会改变它）
+  useEffect(() => {
+    if (mode !== "all") return;
+    void getApi()
+      .getReviewNext("new")
+      .then((response) => setNewCount(response.remaining + (response.item ? 1 : 0)))
+      .catch(() => {});
+  }, [mode, item]);
+
+  useEffect(() => {
     return () => {
       if (transitionTimer.current != null) {
         window.clearTimeout(transitionTimer.current);
         transitionTimer.current = null;
       }
     };
-  }, [loadNext]);
+  }, []);
 
   /**
-   * 「已看过」只在用户主动跳过时写入。取下一张本身是纯读取——
+   * 「已看过」只在 New 模式下、用户主动跳过时写入。取下一张本身是纯读取——
    * 否则光是打开这一页（或刷新）就会静默消耗回看队列。
+   * 漫游模式下更不能写：那是浏览，不是清队列。
    */
   const skip = useCallback(() => {
     if (state !== "ready" || !item || leaving) return;
@@ -59,18 +82,20 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
     transitionTimer.current = window.setTimeout(() => {
       transitionTimer.current = null;
       void (async () => {
-        try {
-          await getApi().markReviewSeen(captureId);
-        } catch (error) {
-          onToast(`标记已看过失败：${error instanceof Error ? error.message : String(error)}`);
+        if (mode === "new") {
+          try {
+            await getApi().markReviewSeen(captureId);
+          } catch (error) {
+            onToast(`标记已看过失败：${error instanceof Error ? error.message : String(error)}`);
+          }
         }
-        await loadNext();
+        await loadNext(mode);
       })();
     }, 210);
-  }, [item, leaving, loadNext, onToast, state]);
+  }, [item, leaving, loadNext, mode, onToast, state]);
 
   const archive = useCallback(async () => {
-    if (state !== "ready" || !item || leaving) return;
+    if (state !== "ready" || !item || leaving || item.capture.archived) return;
     if (item.capture.intent === "favorite" && !window.confirm("这是「常用」内容，确认归档？")) {
       return;
     }
@@ -80,12 +105,12 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
       setLeaving("right");
       transitionTimer.current = window.setTimeout(() => {
         transitionTimer.current = null;
-        void loadNext();
+        void loadNext(mode);
       }, 210);
     } catch (error) {
       onToast(`归档失败：${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [item, leaving, loadNext, onToast, state]);
+  }, [item, leaving, loadNext, mode, onToast, state]);
 
   // 键盘：← 下一条，→ 归档（不在输入框聚焦时）
   useEffect(() => {
@@ -105,15 +130,35 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
     return () => window.removeEventListener("keydown", onKeydown);
   }, [archive, item, leaving, skip, state]);
 
+  const archived = item?.capture.archived ?? false;
+
   return (
     <section className="page">
       <div className="review-stage">
+        <div className="mode-tabs review-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "new"}
+            className={`mode-tab ${mode === "new" ? "active" : ""}`}
+            onClick={() => setMode("new")}
+          >
+            New（{newCount}）
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "all"}
+            className={`mode-tab ${mode === "all" ? "active" : ""}`}
+            onClick={() => setMode("all")}
+          >
+            All
+          </button>
+        </div>
+
         {state === "ready" && item ? (
           <>
-            {/* 进度文字在上，纸边在下——纸边紧贴卡片，才读成「下面还有一张」 */}
-            <div className="review-banner">
-              <div className="review-meta"> {remaining} 张 新的卡片</div>
-            </div>
+            {/* 计数只在 tab 上出现一次：卡片上方再写一遍就是同一个数字说两遍 */}
             <div className="card-stack">
               <KnowledgeCard
                 density="full"
@@ -145,13 +190,14 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
                 <span>下一条</span>
                 <span className="keycap">←</span>
               </button>
+              {/* 漫游会遇到已归档的卡：按钮留在原位但不可点，位置不跳 */}
               <button
                 type="button"
                 className="action-button keep"
                 onClick={() => void archive()}
-                disabled={leaving != null}
+                disabled={leaving != null || archived}
               >
-                <span>归档</span>
+                <span>{archived ? "已归档" : "归档"}</span>
                 <span className="keycap">→</span>
               </button>
             </div>
@@ -159,15 +205,23 @@ export function ReviewPage({ onToast }: ReviewPageProps) {
         ) : (
           <div className="empty-card empty-state" style={{ width: "min(600px, 92%)" }}>
             <div>
-              <strong>{state === "loading" ? "抽取中…" : "没有待消化的收藏。"}</strong>
+              <strong>
+                {state === "loading"
+                  ? "抽取中…"
+                  : mode === "new"
+                    ? "没有待消化的收藏。"
+                    : "收藏库里还没有卡片。"}
+              </strong>
               <span>
                 {state === "loading"
-                  ? "正在从收藏库随机抽取一条。"
-                  : "从顶栏或浏览器插件收藏新内容，解析完成后会进入回看队列。"}
+                  ? "正在从收藏库随机抽取一张。"
+                  : mode === "new"
+                    ? "都看完了。切到 All 可以在全库里随便逛。"
+                    : "从顶栏或浏览器插件收藏新内容，解析完成后卡片会出现在这里。"}
               </span>
               {state === "empty" && (
                 <div style={{ marginTop: 18 }}>
-                  <button type="button" className="btn" onClick={() => void loadNext()}>
+                  <button type="button" className="btn" onClick={() => void loadNext(mode)}>
                     重新检查
                   </button>
                 </div>

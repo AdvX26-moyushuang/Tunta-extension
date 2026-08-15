@@ -28,6 +28,7 @@ import type {
   LibrarySource,
   ProjectProposalMode,
   RetrieveResponse,
+  ReviewMode,
   ReviewQueueResponse,
   SourceBlock,
   SubmitCaptureRequest,
@@ -341,7 +342,7 @@ export function createMockApi(): TuntaApi {
     return library.cards[0] ?? null;
   }
 
-  const getReviewNext = createSingleFlight(() => {
+  const nextNew = createSingleFlight(() => {
     const selection = chooseReviewCandidate(
       captures.map((capture) => {
         const card = cardForCapture(capture);
@@ -365,6 +366,25 @@ export function createMockApi(): TuntaApi {
       remaining: selection.remaining,
     });
   });
+
+  /** 漫游：全卡库随机，忽略 seen / archived（隐藏的卡除外） */
+  const nextRoam = createSingleFlight(() => {
+    const pool = library.cards.filter((card) => !cardStates.get(card.cardId)?.hidden);
+    if (pool.length === 0) return delay<ReviewQueueResponse>({ item: null, remaining: 0 });
+    const card = pool[Math.floor(Math.random() * pool.length)];
+    const capture =
+      captures.find((item) => item.sourceId === card.source?.source_id) ?? captures[0];
+    return delay<ReviewQueueResponse>({
+      item: {
+        capture: { ...capture },
+        card: structuredClone(card),
+        originalUrl: card.source?.originalUrl ?? capture.url,
+      },
+      remaining: pool.length,
+    });
+  });
+
+  const getReviewNext = (mode: ReviewMode = "new") => (mode === "all" ? nextRoam() : nextNew());
 
   const api: TuntaApi = {
     getStatus: () =>

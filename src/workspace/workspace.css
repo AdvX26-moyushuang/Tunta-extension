@@ -607,22 +607,13 @@ body {
 }
 
 /*
- * 原来这里是「一条蓝带 + 白字压在上面」。蓝色去掉之后，那条带子只剩
- * 一块夹在页面和卡片中间的中性色，既不是纸也不是底，还离卡片 50px 远，
- * 读起来就是块污渍。
- *
- * 拆开：进度那行字回到井底当普通说明文字，「还有下一张」交给一条紧贴
- * 卡片上沿的纸边——它是卡片，所以它就该是纸色。
+ * 卡片上方原来有一行进度文字（「还有 N 张」）。计数搬到 tab 上之后它就是
+ * 同一个数字说两遍，整条 banner 一起撤掉——tab 既是切换也是计数。
  */
-.review-banner {
-  position: relative;
+.review-tabs {
   z-index: 1;
-  display: flex;
-  width: min(652px, calc(100% - 28px));
-  flex-direction: column;
-  align-items: center;
-  gap: 18px;
-  margin-bottom: 0;
+  margin-top: 0;
+  margin-bottom: 22px;
 }
 
 .card-shadow {
@@ -1207,21 +1198,14 @@ body {
   color: var(--brand-otter);
 }
 
-/* 进度说明：井底的普通辅助文字，不需要自己的衬底 */
-.review-meta {
-  position: relative;
-  z-index: 1;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  text-align: center;
-}
-
 /* ---------- recall / search ---------- */
 
 .search-box {
   display: grid;
   max-width: 960px;
-  grid-template-columns: minmax(0, 1fr) 58px;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-right: 9px;
   overflow: hidden;
   border: 0;
   border-radius: var(--r-md);
