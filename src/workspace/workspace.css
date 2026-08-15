@@ -1243,12 +1243,20 @@ body {
   font-size: var(--text-base);
 }
 
+/*
+ * 检索按钮是「贴在输入条里的图标键」，不是右半边的整块色板：
+ * 圆形只比放大镜大一圈，静息中性，把实心黄让给顶栏的「收藏」——
+ * 同屏两块大黄的时候，黄就不再是焦点。
+ */
 .search-box button {
   display: grid;
+  width: 36px;
+  height: 36px;
   cursor: pointer;
   place-items: center;
   border: 0;
-  background: var(--brand-sun);
+  border-radius: var(--r-pill);
+  background: transparent;
   color: var(--ink);
   transition: background 140ms ease;
 }
@@ -1262,8 +1270,18 @@ body {
   stroke-width: 1.8;
 }
 
+/* 主操作的 hover：浅黄点一下「此刻该动这里」，按下才落到实心黄 */
 .search-box button:hover:not(:disabled) {
-  background: var(--brand-water-soft);
+  background: var(--brand-sun-pale);
+}
+
+.search-box button:active:not(:disabled) {
+  background: var(--brand-sun);
+}
+
+.search-box button:focus-visible {
+  outline: 0;
+  box-shadow: var(--outline-focus);
 }
 
 .search-box button:disabled {
